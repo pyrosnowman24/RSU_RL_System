@@ -26,12 +26,12 @@ class Attention(LightningModule):
         self.W = nn.Parameter(torch.zeros((1, hidden_size, 3 * hidden_size),
                                           device=device, requires_grad=True))
 
-    def forward(self, static_hidden, dynamic_hidden, decoder_hidden):
+    def forward(self, static_hidden, decoder_hidden):
 
         batch_size, hidden_size, _ = static_hidden.size()
 
         hidden = decoder_hidden.unsqueeze(2).expand_as(static_hidden)
-        hidden = torch.cat((static_hidden, dynamic_hidden, hidden), 1)
+        hidden = torch.cat((static_hidden, hidden), 1)
 
         # Broadcast some dimensions so we can do batch-matrix-multiply
         v = self.v.expand(batch_size, 1, hidden_size)
@@ -66,7 +66,7 @@ class Pointer(LightningModule):
         self.drop_rnn = nn.Dropout(p=dropout)
         self.drop_hh = nn.Dropout(p=dropout)
 
-    def forward(self, static_hidden, dynamic_hidden, decoder_hidden, last_hh):
+    def forward(self, static_hidden, decoder_hidden, last_hh):
 
         rnn_out, last_hh = self.gru(decoder_hidden.transpose(2, 1), last_hh)
         rnn_out = rnn_out.squeeze(1)
@@ -78,7 +78,7 @@ class Pointer(LightningModule):
             last_hh = self.drop_hh(last_hh) 
 
         # Given a summary of the output, find an  input context
-        enc_attn = self.encoder_attn(static_hidden, dynamic_hidden, rnn_out)
+        enc_attn = self.encoder_attn(static_hidden, rnn_out)
         context = enc_attn.bmm(static_hidden.permute(0, 2, 1))  # (B, 1, num_feats)
 
         # Calculate the next output using Batch-matrix-multiply ops
@@ -93,7 +93,7 @@ class Pointer(LightningModule):
         return probs, last_hh
 
 class Encoder(LightningModule):
-    """Encodes the static & dynamic states using 1d Convolution."""
+    """Encodes the static states using 1d Convolution."""
 
     def __init__(self, input_size, hidden_size):
         super(Encoder, self).__init__()
@@ -111,10 +111,8 @@ class Actor(LightningModule):
     static_size: int
         Defines how many features are in the static elements of the model
         (e.g. 2 for (x, y) coordinates)
-    dynamic_size: int > 1
-        Defines how many features are in the dynamic elements of the model.
     hidden_size: int
-        Defines the number of units in the hidden layer for all static, dynamic,
+        Defines the number of units in the hidden layer for all static
         and decoder output units.
     update_fn: function, optional
         If provided, this method is used to calculate how the input dynamic
@@ -131,20 +129,16 @@ class Actor(LightningModule):
         Defines the dropout rate for the decoder, by default 0
     """
 
-    def __init__(self, static_size, dynamic_size, hidden_size,
+    def __init__(self, static_size, hidden_size,
                  update_fn=None, mask_fn=None, num_layers=1, dropout=0.):
         super(Actor, self).__init__()
 
-        if dynamic_size < 1:
-            raise ValueError(':param dynamic_size: must be > 0, even if the '
-                             'problem has no dynamic elements')
 
         self.update_fn = update_fn
         self.mask_fn = mask_fn
 
         # Define the encoder & decoder models
         self.static_encoder = Encoder(static_size, hidden_size)
-        self.dynamic_encoder = Encoder(dynamic_size, hidden_size)
         self.decoder = Encoder(static_size, hidden_size)
         self.pointer = Pointer(hidden_size, num_layers, dropout)
 
@@ -155,15 +149,12 @@ class Actor(LightningModule):
         # Used as a proxy initial state in the decoder when not specified
         self.x0 = torch.zeros((1, static_size, 1), requires_grad=True, device=device)
 
-    def forward(self, static, dynamic, decoder_input=None, last_hh=None):
+    def forward(self, static, decoder_input=None, last_hh=None):
         """
         Parameters
         ----------
         static: Array of size (batch_size, feats, num_cities)
             Defines the elements to consider as static.
-        dynamic: Array of size (batch_size, feats, num_cities)
-            Defines the elements to consider as static. If there are no dynamic
-            elements, this can be set to None
         decoder_input: Array of size (batch_size, num_feats)
             Defines the outputs for the decoder.
         last_hh: Array of size (batch_size, num_hidden)
@@ -183,10 +174,8 @@ class Actor(LightningModule):
         max_steps = sequence_size if self.mask_fn is None else 1000
 
         # Static elements only need to be processed once, and can be used across
-        # all 'pointing' iterations. When / if the dynamic elements change,
-        # their representations will need to get calculated again.
+        # all 'pointing' iterations.
         static_hidden = self.static_encoder(static)
-        dynamic_hidden = self.dynamic_encoder(dynamic)
 
         for _ in range(max_steps):
 
@@ -197,7 +186,6 @@ class Actor(LightningModule):
             decoder_hidden = self.decoder(decoder_input)
 
             probs, last_hh = self.pointer(static_hidden,
-                                          dynamic_hidden,
                                           decoder_hidden, last_hh)
             probs = F.softmax(probs + mask.log(), dim=1)
 
@@ -216,21 +204,6 @@ class Actor(LightningModule):
                 prob, ptr = torch.max(probs, 1)  # Greedy
                 logp = prob.log()
 
-            # After visiting a node update the dynamic representation
-            if self.update_fn is not None:
-                dynamic = self.update_fn(dynamic, ptr.data)
-                dynamic_hidden = self.dynamic_encoder(dynamic)
-
-                # Since we compute the VRP in minibatches, some tours may have
-                # number of stops. We force the vehicles to remain at the depot 
-                # in these cases, and logp := 0
-                is_done = dynamic[:, 1].sum(1).eq(0).float()
-                logp = logp * (1. - is_done)
-
-            # And update the mask so we don't re-visit if we don't need to
-            if self.mask_fn is not None:
-                mask = self.mask_fn(mask, dynamic, ptr.data).detach()
-
             tour_logp.append(logp.unsqueeze(1))
             tour_idx.append(ptr.data.unsqueeze(1))
 
@@ -247,11 +220,10 @@ class Critic(LightningModule):
     """Estimates the problem complexity.
     """
 
-    def __init__(self, static_size, dynamic_size, hidden_size):
+    def __init__(self, static_size, hidden_size):
         super(Critic, self).__init__()
 
         self.static_encoder = Encoder(static_size, hidden_size)
-        self.dynamic_encoder = Encoder(dynamic_size, hidden_size)
 
         # Define the encoder & decoder models
         self.fc1 = nn.Conv1d(hidden_size * 2, 20, kernel_size=1)
@@ -261,13 +233,12 @@ class Critic(LightningModule):
         for p in self.parameters():
             if len(p.shape) > 1:
                 nn.init.xavier_uniform_(p)
-    def forward(self, static, dynamic):
+    def forward(self, static):
 
         # Use the probabilities of visiting each
         static_hidden = self.static_encoder(static)
-        dynamic_hidden = self.dynamic_encoder(dynamic)
 
-        hidden = torch.cat((static_hidden, dynamic_hidden), 1)
+        hidden = static_hidden
 
         output = F.relu(self.fc1(hidden))
         output = F.relu(self.fc2(output))
@@ -349,7 +320,6 @@ class DRL_System(LightningModule):
                        critic_lr: float = 5e-4, 
                        batch_size: int = 200,
                        static_size: int = 4,
-                       dynamic_size: int = 1,
                        checkpoint: str = None,
                        replay_buffer_size: int = 50,
                        episode_length:int = 200,
@@ -369,7 +339,6 @@ class DRL_System(LightningModule):
             critic_lr (float, optional): _description_. Defaults to 5e-4.
             batch_size (int, optional): _description_. Defaults to 200.
             static_size (int, optional): _description_. Defaults to 4.
-            dynamic_size (int, optional): _description_. Defaults to 1.
             checkpoint (str, optional): _description_. Defaults to None.
             replay_buffer_size (int, optional): _description_. Defaults to 50.
             episode_length (int, optional): _description_. Defaults to 200.
@@ -400,7 +369,6 @@ class DRL_System(LightningModule):
         self.total_reward = 0
 
         self.actor = Actor(static_size,
-                           dynamic_size,
                            self.hidden_size,
                            update_fn,
                            update_mask,
@@ -408,7 +376,6 @@ class DRL_System(LightningModule):
                            self.dropout).to(device)
 
         self.critic = Critic(static_size,
-                             dynamic_size,
                              self.hidden_size).to(device)
 
         self.agent = Agent()
@@ -434,14 +401,14 @@ class DRL_System(LightningModule):
         return rsu_indicies
 
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
-        static, dynamic, x0 = batch
+        static, x0 = batch
 
-        rsu_indices, rsu_logp = self.actor(static, dynamic, x0)
+        rsu_indices, rsu_logp = self.actor(static, x0)
 
         reward, done = self.agent.simulation_step(rsu_indices)
         self.episode_rewards += reward
 
-        critic_est = self.critic(static,dynamic).view(-1)
+        critic_est = self.critic(static).view(-1)
 
         actor_loss, critic_loss = self.model_loss(reward,critic_est,rsu_logp)
 
