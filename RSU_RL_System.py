@@ -1,13 +1,18 @@
-from typing import List, Tuple
+from typing import List, Tuple, Callable, Iterator
 from collections import OrderedDict, deque, namedtuple
+
 import torch
-from pytorch_lightning import LightningModule, Trainer
 from torch import Tensor, nn
 from torch.optim import Adam, Optimizer
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.utils.data.dataset import IterableDataset
+
+from pytorch_lightning import LightningModule, Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
+
 import numpy as np
+import argparse
 
 # This is a advantage actor-critic model
 
@@ -23,7 +28,7 @@ class Attention(LightningModule):
         self.v = nn.Parameter(torch.zeros((1, 1, hidden_size),
                                           device=device, requires_grad=True))
 
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 3 * hidden_size),
+        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size),
                                           device=device, requires_grad=True))
 
     def forward(self, static_hidden, decoder_hidden):
@@ -103,6 +108,17 @@ class Encoder(LightningModule):
         output = self.conv(input)
         return output  # (batch, hidden_size, seq_len)
 
+class Decoder(LightningModule):
+    """Decodes the hidden states using 1d Convolution."""
+
+    def __init__(self, input_size, hidden_size):
+        super(Decoder, self).__init__()
+        self.conv = nn.Conv1d(input_size, hidden_size, kernel_size=1)
+
+    def forward(self, input):
+        output = self.conv(input)
+        return output  # (batch, hidden_size, seq_len)
+
 class Actor(LightningModule):
     """Defines the main Encoder, Decoder, and Pointer combinatorial models.
 
@@ -114,32 +130,19 @@ class Actor(LightningModule):
     hidden_size: int
         Defines the number of units in the hidden layer for all static
         and decoder output units.
-    update_fn: function, optional
-        If provided, this method is used to calculate how the input dynamic
-        elements are updated, and is called after each 'point' to the input element, by default None
-    mask_fn: function, optional
-        Allows us to specify which elements of the input sequence are allowed to
-        be selected. This is useful for speeding up training of the networks,
-        by providing a sort of 'rules' guidlines to the algorithm. If no mask
-        is provided, we terminate the search after a fixed number of iterations
-        to avoid tours that stretch forever, by default None
     num_layers: int, optional
         Specifies the number of hidden layers to use in the decoder RNN, by default 1
     dropout: float, optional
         Defines the dropout rate for the decoder, by default 0
     """
 
-    def __init__(self, static_size, hidden_size,
-                 update_fn=None, mask_fn=None, num_layers=1, dropout=0.):
+    def __init__(self, state_size, hidden_size, num_layers=1, dropout=0.):
         super(Actor, self).__init__()
 
 
-        self.update_fn = update_fn
-        self.mask_fn = mask_fn
-
         # Define the encoder & decoder models
-        self.static_encoder = Encoder(static_size, hidden_size)
-        self.decoder = Encoder(static_size, hidden_size)
+        self.state_encoder = Encoder(state_size, hidden_size)
+        self.decoder = Decoder(state_size, hidden_size)
         self.pointer = Pointer(hidden_size, num_layers, dropout)
 
         for p in self.parameters():
@@ -147,74 +150,54 @@ class Actor(LightningModule):
                 nn.init.xavier_uniform_(p)
 
         # Used as a proxy initial state in the decoder when not specified
-        self.x0 = torch.zeros((1, static_size, 1), requires_grad=True, device=device)
+        self.x0 = torch.zeros((1,state_size, 1), requires_grad=True, device=device)
 
-    def forward(self, static, decoder_input=None, last_hh=None):
+    def forward(self, state, previous_action, intersections, last_hh=None):
         """
         Parameters
         ----------
-        static: Array of size (batch_size, feats, num_cities)
-            Defines the elements to consider as static.
-        decoder_input: Array of size (batch_size, num_feats)
-            Defines the outputs for the decoder.
-        last_hh: Array of size (batch_size, num_hidden)
+        state: Array of size (num_intersections)
+            Mask of the intersections that are selected for the RSU network.
+        previous_action: Array of size (num_intersections)
+            One hot array defining the last intersection that was selected.
+        intersections: Array of size (feats,num_intersections)
+            Defines the features for all intersections.
+        last_hh: Array of size (num_hidden)
             Defines the last hidden state for the RNN
         """
+        mask = torch.ones(*state.shape,dtype=torch.int)
+        if previous_action is None: # If there was not a previous action set encoder input to 0
+            decoder_input = self.x0
+        else:
+            decoder_input = torch.gather(intersections, 2, torch.argmin(previous_action).expand(*intersections.shape[0:2],1)).detach()
+        # Applies encoding to all intersection data, becasue they are constant it only needs to be done once
+        state_hidden = self.state_encoder(intersections)
+        # Below was the former loop to create the entire RSU network
 
-        batch_size, input_size, sequence_size = static.size()
+        decoder_hidden = self.decoder(decoder_input)
 
-        if decoder_input is None:
-            decoder_input = self.x0.expand(batch_size, -1, -1)
+        probs, last_hh = self.pointer(state_hidden, decoder_hidden, last_hh)
+        probs = F.softmax(probs + state.log(), dim=1)
+        # When training, sample the next step according to its probability.
+        # During testing, we can take the greedy approach and choose highest
+        if self.training:
+            m = torch.distributions.Categorical(probs)
 
-        # Always use a mask - if no function is provided, we don't update it
-        mask = torch.ones(batch_size, sequence_size, device=device)
-
-        # Structures for holding the output sequences
-        tour_idx, tour_logp = [], []
-        max_steps = sequence_size if self.mask_fn is None else 1000
-
-        # Static elements only need to be processed once, and can be used across
-        # all 'pointing' iterations.
-        static_hidden = self.static_encoder(static)
-
-        for _ in range(max_steps):
-
-            if not mask.byte().any():
-                break
-
-            # ... but compute a hidden rep for each element added to sequence
-            decoder_hidden = self.decoder(decoder_input)
-
-            probs, last_hh = self.pointer(static_hidden,
-                                          decoder_hidden, last_hh)
-            probs = F.softmax(probs + mask.log(), dim=1)
-
-            # When training, sample the next step according to its probability.
-            # During testing, we can take the greedy approach and choose highest
-            if self.training:
-                m = torch.distributions.Categorical(probs)
-
-                # Sometimes an issue with Categorical & sampling on GPU; See:
-                # https://github.com/pemami4911/neural-combinatorial-rl-pytorch/issues/5
+            ptr = m.sample()
+            while not torch.gather(state, 1, ptr.data.unsqueeze(1)).byte().all():
                 ptr = m.sample()
-                while not torch.gather(mask, 1, ptr.data.unsqueeze(1)).byte().all():
-                    ptr = m.sample()
-                logp = m.log_prob(ptr)
-            else:
-                prob, ptr = torch.max(probs, 1)  # Greedy
-                logp = prob.log()
+            logp = m.log_prob(ptr)
+        else:
+            prob, ptr = torch.max(probs,1)  # Greedy
+            logp = prob.log()
 
-            tour_logp.append(logp.unsqueeze(1))
-            tour_idx.append(ptr.data.unsqueeze(1))
+        RSU_logp = logp.unsqueeze(1)
+        RSU_idx = ptr.data.unsqueeze(1)
 
-            decoder_input = torch.gather(static, 2,
-                                         ptr.view(-1, 1, 1)
-                                         .expand(-1, input_size, 1)).detach()
+        
+        mask[0,RSU_idx] = 0
 
-        tour_idx = torch.cat(tour_idx, dim=1)  # (batch_size, seq_len)
-        tour_logp = torch.cat(tour_logp, dim=1)  # (batch_size, seq_len)
-
-        return tour_idx, tour_logp
+        return mask, RSU_logp, last_hh
 
 class Critic(LightningModule):
     """Estimates the problem complexity.
@@ -226,17 +209,17 @@ class Critic(LightningModule):
         self.static_encoder = Encoder(static_size, hidden_size)
 
         # Define the encoder & decoder models
-        self.fc1 = nn.Conv1d(hidden_size * 2, 20, kernel_size=1)
+        self.fc1 = nn.Conv1d(hidden_size, 20, kernel_size=1)
         self.fc2 = nn.Conv1d(20, 20, kernel_size=1)
         self.fc3 = nn.Conv1d(20, 1, kernel_size=1)
 
         for p in self.parameters():
             if len(p.shape) > 1:
                 nn.init.xavier_uniform_(p)
-    def forward(self, static):
+    def forward(self, static, intersections):
 
         # Use the probabilities of visiting each
-        static_hidden = self.static_encoder(static)
+        static_hidden = self.static_encoder(intersections)
 
         hidden = static_hidden
 
@@ -247,189 +230,134 @@ class Critic(LightningModule):
 
 class Agent:
     def __init__(self):
-        self.hi = "hi"
+        intersections = np.array(((1.0,.4,.8,.9,.3),(1.0,.7,.2,.6,.4)))
+        self.intersections = torch.tensor(np.reshape(intersections,(1,*intersections.shape)),dtype=torch.float32)
 
-    def simulation_step(self,rsu_indices):
-        print("hi")
+    def simulation_step(self,rsu_indices,w1,w2):
+        "Runs a small batch of the simulation"
+        reward = 300
+        return reward
+    
+    def reset(self):
+        "Resets the simulation environment"
+        return torch.ones(1,self.intersections.shape[2],dtype=torch.int)
 
-# Named tuple for storing experience steps gathered in training
-Experience = namedtuple(
-    "Experience",
-    field_names=["state", "action", "reward", "done", "new_state"],
-)
-
-class ReplayBuffer:
-    """Replay Buffer for storing past experiences allowing the agent to learn from them.
-
-    Args:
-        capacity: size of the buffer
+class ExperienceSourceDataset(IterableDataset):
+    """Basic experience source dataset.
+    Takes a generate_batch function that returns an iterator. The logic for the experience source and how the batch is
+    generated is defined the Lightning model itself
     """
 
-    def __init__(self, capacity: int) -> None:
-        self.buffer = deque(maxlen=capacity)
+    def __init__(self, generate_batch: Callable) -> None:
+        self.generate_batch = generate_batch
 
-    def __len__(self) -> None:
-        return len(self.buffer)
-
-    def append(self, experience: Experience) -> None:
-        """Add experience to the buffer.
-
-        Args:
-            experience: tuple (state, action, reward, done, new_state)
-        """
-        self.buffer.append(experience)
-
-    def sample(self, batch_size: int) -> Tuple:
-        indices = np.random.choice(len(self.buffer), batch_size, replace=False)
-        states, actions, rewards, dones, next_states = zip(*(self.buffer[idx] for idx in indices))
-
-        return (
-            np.array(states),
-            np.array(actions),
-            np.array(rewards, dtype=np.float32),
-            np.array(dones, dtype=np.bool),
-            np.array(next_states),
-        )
-
-class RLDataset(IterableDataset):
-    """Iterable Dataset containing the ExperienceBuffer which will be updated with new experiences during training.
-
-    Args:
-        buffer: replay buffer
-        sample_size: number of experiences to sample at a time
-    """
-
-    def __init__(self, buffer: ReplayBuffer, sample_size: int = 200) -> None:
-        self.buffer = buffer
-        self.sample_size = sample_size
-
-    def __iter__(self):
-        states, actions, rewards, dones, new_states = self.buffer.sample(self.sample_size)
-        for i in range(len(dones)):
-            yield states[i], actions[i], rewards[i], dones[i], new_states[i]
+    def __iter__(self) -> Iterator:
+        iterator = self.generate_batch()
+        return iterator
 
 class DRL_System(LightningModule):
-    def __init__(self, num_nodes: int = 100, 
-                       train_size: int = 120000,
+    def __init__(self, train_size: int = 120000,
                        valid_size: int = 1000, 
                        hidden_size: int = 128, 
                        num_layers: int = 1, 
                        dropout: float = 0.1, 
-                       seed: int = 12345, 
                        actor_lr: float = 5e-4,
                        critic_lr: float = 5e-4, 
                        batch_size: int = 200,
-                       static_size: int = 4,
-                       checkpoint: str = None,
-                       replay_buffer_size: int = 50,
-                       episode_length:int = 200,
+                       state_size: int = 2,
                        w1: int = 1, 
                        w2: int = 0):
         """DRL model for solving RSU placement problem
 
         Args:
-            num_nodes (int, optional): _description_. Defaults to 100.
             train_size (int, optional): _description_. Defaults to 120000.
             valid_size (int, optional): _description_. Defaults to 1000.
             hidden_size (int, optional): _description_. Defaults to 128.
             num_layers (int, optional): _description_. Defaults to 1.
             dropout (float, optional): _description_. Defaults to 0.1.
-            seed (int, optional): _description_. Defaults to 12345.
             actor_lr (float, optional): _description_. Defaults to 5e-4.
             critic_lr (float, optional): _description_. Defaults to 5e-4.
             batch_size (int, optional): _description_. Defaults to 200.
-            static_size (int, optional): _description_. Defaults to 4.
+            state_size (int, optional): _description_. Defaults to 4.
             checkpoint (str, optional): _description_. Defaults to None.
-            replay_buffer_size (int, optional): _description_. Defaults to 50.
-            episode_length (int, optional): _description_. Defaults to 200.
             w1 (int, optional): _description_. Defaults to 1.
             w2 (int, optional): _description_. Defaults to 0.
         """
 
         super(DRL_System,self).__init__()
-        self.num_nodes = num_nodes
         self.train_size = train_size
         self.valid_size = valid_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout = dropout
-        self.seed = seed
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
         self.batch_size = batch_size
-        self.checkpoint = checkpoint
-        self.episode_length = episode_length
-        self.buffer = ReplayBuffer(replay_buffer_size)
+        self.state_size = state_size
         self.w1 = w1
         self.w2 = w2
-        update_fn = None
-        update_mask = None
 
-        self.episode_rewards = 0
-        self.total_reward = 0
-
-        self.actor = Actor(static_size,
+        self.actor = Actor(state_size,
                            self.hidden_size,
-                           update_fn,
-                           update_mask,
                            self.num_layers,
                            self.dropout).to(device)
 
-        self.critic = Critic(static_size,
+        self.critic = Critic(state_size,
                              self.hidden_size).to(device)
 
         self.agent = Agent()
 
-    def model_loss(self,reward,critic_est,tour_logp):
+        self.episode_rewards = []
+        self.critic_rewards = []
+        self.batch_actions = []
+        self.avg_rewards = 0
+        self.logps = []
+        self.total_rewards = []
+        self.batch_states = []
+        self.last_hhs = []
+        self.done_episodes = 0
+        self.state = self.agent.reset()
+        self.done = False
+
+    def model_loss(self,rewards,critic_ests,logps):
         """Function to calculate the losses for the actor and critic.
 
         Args:
-            reward (float): The actual reward for the RSU network.
-            critic_est (float): The estimate of the reward for the RSU network from the critic.
-            tour_logp (float): Log probabilities for each of the selected RSUs in the network.
+            rewards (float): The actual rewards for the RSU network.
+            critic_est (float): The estimate of the rewards for the RSU network from the critic.
+            logps (float): Log probabilities for each of the selected RSUs in the network.
 
         Returns:
             _type_: _description_
         """
-        advantage = (reward-critic_est)
-        actor_loss = torch.mean(advantage.detach() * tour_logp.sum(dim=1))
+        advantages = torch.sub(rewards,critic_ests)
+        advantage = torch.sum(advantages) # Not sure whether to use SUM or MEAN
+        actor_loss = torch.mean(advantage.detach() * logps.sum(dim=1))
         critic_loss = torch.mean(advantage ** 2)
         return actor_loss, critic_loss
 
     def forward(self,x: Tensor) -> Tensor:
+        # This must be redone based on the new actor call method, it should still return an RSU network
         rsu_indicies, _ = self.actor(x)
         return rsu_indicies
 
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
-        static, x0 = batch
+        states, actions, logps, rewards, critic_rewards = batch
 
-        rsu_indices, rsu_logp = self.actor(static, x0)
+        actor_loss, critic_loss = self.model_loss(rewards,critic_rewards,logps)
 
-        reward, done = self.agent.simulation_step(rsu_indices)
-        self.episode_rewards += reward
-
-        critic_est = self.critic(static).view(-1)
-
-        actor_loss, critic_loss = self.model_loss(reward,critic_est,rsu_logp)
-
-        if done:
-            self.total_reward = self.episode_reward
-            self.episode_reward = 0
 
         if optimizer_idx == 0: loss = actor_loss
         if optimizer_idx == 1: loss = critic_loss
 
         log = {
-            "total_reward": torch.tensor(self.total_reward).to(device),
-            "reward": torch.tensor(reward).to(device),
+            "episodes": self.done_episodes,
+            "reward": self.total_rewards[-1],
             "train_loss": loss,
-        }
-        status = {
-            "steps": torch.tensor(self.global_step).to(device),
-            "total_reward": torch.tensor(self.total_reward).to(device),
+            "avg_reward": self.avg_rewards,
         }
 
-        return OrderedDict({"loss": loss, "log": log, "progress_bar": status})
+        return OrderedDict({"loss": loss, "log": log, "progress_bar": log})
         
     def configure_optimizers(self) -> List[Optimizer]:
         """Initializes Adam optimizers for actor and critic.
@@ -441,20 +369,86 @@ class DRL_System(LightningModule):
         critic_optim = Adam(self.critic.parameters(), lr=self.critic_lr)
         return [actor_optim, critic_optim]
 
-    def train_dataloader(self) -> DataLoader:
-        """Training loader for experience data, used for experience replay training.
-
+    def train_batch(self,) -> Tuple[List[Tensor], List[Tensor], List[Tensor]]:
+        """Contains the logic for generating a new batch of data to be passed to the DataLoader.
         Returns:
-            DataLoader: Loader for experience dataset.
+            yields a tuple of Lists containing tensors for states, actions and rewards of the batch.
         """
-        return self.__dataloader()
-
-    def __dataloader(self) -> DataLoader:
-        """Initializes the replay buffer used for retrieving experiences.
-
-        Returns:
-            DataLoader: Loader for experience dataset.
         """
-        dataset = self.RLDDataset(self.buffer, self.episode_length)
-        dataloader = DataLoader(dataset=dataset,batch_size=self.batch_size)
+        States: Mask of 0 and 1 determining which RSUs are selected for the RSU network, 0 is selected and 1 is not selected
+        Action: One cold mask determining which RSU is selected to be placed into RSU network
+        Logp: Log probability of selected RSU
+        Reward: reward from simulation for RSU network
+        Critic Reward: Estimation of the reward by the Critic
+        Next State: np.bitwise_and of States and Action (Adds selected RSU to mask of RSU network)
+        """
+        while True:
+            intersections = self.agent.intersections
+
+            if len(self.batch_actions) == 0: previous_action = None # If there was no previous action
+            else: previous_action = self.batch_actions[-1]
+
+            if len(self.last_hhs) == 0: last_hh = None
+            else: last_hh = self.last_hhs[-1]
+            action, logp, current_hh = self.actor(self.state,previous_action,intersections,last_hh = last_hh)
+            next_state = torch.bitwise_and(self.state,action)
+            reward = self.agent.simulation_step(next_state,self.w1,self.w2)
+
+            critic_reward = self.critic(next_state, intersections).view(-1)
+
+            self.episode_rewards.append(reward)
+            self.critic_rewards.append(critic_reward)
+            self.logps.append(logp)
+            self.batch_actions.append(action)
+            self.batch_states.append(self.state)
+            self.state = next_state
+            self.last_hhs.append(current_hh)
+
+            if torch.sum(next_state) == 0: # If all intersections have been selected, then the simulation should end. 
+                self.done = True
+
+            if self.done:
+                self.done_episodes += 1
+                self.done = False
+                self.state = self.agent.reset()
+                self.total_rewards.append(np.sum(self.episode_rewards))
+                self.avg_rewards = float(np.mean(self.total_rewards))
+
+                for idx in range(len(self.batch_actions)):
+                    yield self.batch_states[idx], self.batch_actions[idx], self.logps[idx], self.episode_rewards[idx], self.critic_rewards[idx]
+
+                self.batch_states = []
+                self.batch_actions = []
+                self.logps = []
+                self.episode_rewards = []
+                self.critic_rewards = []
+                self.last_hhs = []
+
+    def _dataloader(self) -> DataLoader:
+        """Initialize the Replay Buffer dataset used for retrieving experiences."""
+        dataset = ExperienceSourceDataset(self.train_batch)
+        dataloader = DataLoader(dataset=dataset, batch_size=self.batch_size)
         return dataloader
+
+    def train_dataloader(self) -> DataLoader:
+        """Get train loader."""
+        return self._dataloader()
+
+if __name__ == '__main__':
+    num_nodes = 100
+    parser = argparse.ArgumentParser(description='Combinatorial Optimization')
+    parser.add_argument('--actor_lr', default=5e-4, type=float)
+    parser.add_argument('--critic_lr', default=5e-4, type=float)
+    parser.add_argument('--batch_size', default=200, type=int)
+    parser.add_argument('--hidden', dest='hidden_size', default=128, type=int)
+    parser.add_argument('--dropout', default=0.1, type=float)
+    parser.add_argument('--layers', dest='num_layers', default=1, type=int)
+    parser.add_argument('--train-size',default=120000, type=int)
+    parser.add_argument('--valid-size', default=1000, type=int)
+    args = parser.parse_args()
+    T = 100
+    w2_list = np.arange(T+1)/T
+    w1_list = 1-w2_list
+    model = DRL_System(**args.__dict__)
+    trainer = Trainer()
+    trainer.fit(model)
