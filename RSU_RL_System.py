@@ -1,4 +1,5 @@
 from json import encoder
+from tkinter import Variable
 from typing import List, Tuple, Callable, Iterator
 from collections import OrderedDict, deque, namedtuple
 
@@ -13,24 +14,21 @@ from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 import numpy as np
+from numpy.random import default_rng
 import argparse
 
 # This is a advantage actor-critic model
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-class Attention(LightningModule):
+class Attention(nn.Module):
     """Calculates attention over the input nodes given the current state."""
 
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, device):
         super(Attention, self).__init__()
 
         # W processes features from static decoder elements
-        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size),
-                                          device=device, requires_grad=True))
+        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), device=device, requires_grad=True))
 
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size),
-                                          device=device, requires_grad=True))
+        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), device=device, requires_grad=True))
 
     def forward(self, static_hidden, decoder_hidden):
 
@@ -47,27 +45,25 @@ class Attention(LightningModule):
         attns = F.softmax(attns, dim=2)  # (batch, seq_len)
         return attns
 
-class Pointer(LightningModule):
+class Pointer(nn.Module):
     """Calculates the next state given the previous state and input embeddings."""
 
-    def __init__(self, hidden_size, num_layers=1, dropout=0.2):
+    def __init__(self, hidden_size, device, num_layers=1, dropout=0.2):
         super(Pointer, self).__init__()
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
         # Used to calculate probability of selecting next state
-        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size),
-                                          device=device, requires_grad=True))
+        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), device=device, requires_grad=True))
 
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size),
-                                          device=device, requires_grad=True))
+        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), device=device, requires_grad=True))
 
         # Used to compute a representation of the current decoder output
         self.gru = nn.GRU(hidden_size, hidden_size, num_layers,
                           batch_first=True,
                           dropout=dropout if num_layers > 1 else 0)
-        self.encoder_attn = Attention(hidden_size)
+        self.encoder_attn = Attention(hidden_size, device)
 
         self.drop_rnn = nn.Dropout(p=dropout)
         self.drop_hh = nn.Dropout(p=dropout)
@@ -98,7 +94,7 @@ class Pointer(LightningModule):
 
         return probs, current_hh
 
-class Encoder(LightningModule):
+class Encoder(nn.Module):
     """Encodes the static states using 1d Convolution."""
 
     def __init__(self, input_size, hidden_size):
@@ -109,7 +105,7 @@ class Encoder(LightningModule):
         output = self.conv(input)
         return output  # (batch, hidden_size, seq_len)
 
-class Decoder(LightningModule):
+class Decoder(nn.Module):
     """Decodes the hidden states using 1d Convolution."""
 
     def __init__(self, input_size, hidden_size):
@@ -120,7 +116,7 @@ class Decoder(LightningModule):
         output = self.conv(input)
         return output  # (batch, hidden_size, seq_len)
 
-class Actor(LightningModule):
+class Actor(nn.Module):
     """Defines the main Encoder, Decoder, and Pointer combinatorial models.
 
     Parameters
@@ -137,19 +133,20 @@ class Actor(LightningModule):
         Defines the dropout rate for the decoder, by default 0
     """
 
-    def __init__(self, state_size, hidden_size, num_layers=1, dropout=0.):
+    def __init__(self, state_size, hidden_size, device, num_layers=1, dropout=0.):
         super(Actor, self).__init__()
         # Define the encoder & decoder models
         self.state_encoder = Encoder(state_size, hidden_size)
         self.decoder = Decoder(state_size, hidden_size)
-        self.pointer = Pointer(hidden_size, num_layers, dropout)
+        self.pointer = Pointer(hidden_size, device, num_layers, dropout)
+        self.device = device
 
         for p in self.parameters():
             if len(p.shape) > 1:
                 nn.init.xavier_uniform_(p)
 
         # Used as a proxy initial state in the decoder when not specified
-        self.x0 = torch.zeros((1,state_size, 1), requires_grad=True, device=device)
+        self.x0 = torch.zeros((1,state_size, 1), requires_grad=True, device=self.device)
 
     def forward(self, state, intersections, previous_action=None, last_hh=None):
         """
@@ -165,19 +162,18 @@ class Actor(LightningModule):
             Defines the last hidden state for the RNN
         """
         action = torch.ones(*state.shape,dtype=torch.int)
-
-        encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==0)[0])).detach()
+        encoder_input = intersections
+        # encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==1)[1]).expand(*intersections.shape[0:2],-1)).detach()
 
         if previous_action is None: # If there was not a previous action set encoder input to 0
             decoder_input = self.x0
         else:
             decoder_input = torch.gather(intersections, 2, torch.argmin(previous_action).expand(*intersections.shape[0:2],1)).detach()
-        
         # Applies encoding to all potential intersections
         state_hidden = self.state_encoder(encoder_input)
         decoder_hidden = self.decoder(decoder_input)
         probs, current_hh = self.pointer(state_hidden, decoder_hidden, last_hh)
-        
+
         probs = F.softmax(probs + state.log(), dim=1)
         # When training, sample the next step according to its probability.
         # During testing, we can take the greedy approach and choose highest
@@ -200,7 +196,7 @@ class Actor(LightningModule):
 
         return action, RSU_logp, current_hh
 
-class Critic(LightningModule):
+class Critic(nn.Module):
     """Estimates the problem complexity.
     """
 
@@ -218,8 +214,9 @@ class Critic(LightningModule):
             if len(p.shape) > 1:
                 nn.init.xavier_uniform_(p)
     def forward(self, state, intersections):
-        
-        encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==0)[0])).detach()
+
+        encoder_input = intersections
+        # encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==1)[1]).expand(*intersections.shape[0:2],-1)).detach()
 
         hidden = self.static_encoder(encoder_input)
 
@@ -228,8 +225,8 @@ class Critic(LightningModule):
         output = self.fc3(output).sum(dim=2)
         return output
 
-class Actor_Critic(LightningModule):
-    def __init__(self, actor_net: nn.Module, critic_net: nn.Module, agent) -> None:
+class Actor_Critic(nn.Module):
+    def __init__(self, actor_net: nn.Module, critic_net: nn.Module, agent, device = 'cpu') -> None:
         super().__init__()
         self.actor_net = actor_net
         self.critic_net = critic_net
@@ -237,9 +234,10 @@ class Actor_Critic(LightningModule):
 
         self.previous_action = None
         self.previous_hh = None
+        self.device = device
     
-    def forward(self,state: torch.Tensor, device: str) -> Tuple:
-        state = state.to(device)
+    def forward(self,state: torch.Tensor) -> Tuple:
+        state = state.to(self.device)
         intersections = self.agent.intersections
 
         # if len(self.batch_actions) == 0: previous_action = None # If there was no previous action
@@ -248,9 +246,9 @@ class Actor_Critic(LightningModule):
         # if len(self.last_hhs) == 0: last_hh = None
         # else: last_hh = self.last_hhs[-1]
 
-        action, logp, current_hh = self.actor(self.state, intersections, self.previous_action, self.previous_hh)
+        action, logp, current_hh = self.actor_net(state, intersections, self.previous_action, self.previous_hh)
 
-        critic_reward = self.critic(state, intersections).view(-1)
+        critic_reward = self.critic_net(state, intersections).view(-1)
 
         # Save for next run of the actor
         self.previous_action = action.detach()
@@ -263,8 +261,8 @@ class Actor_Critic(LightningModule):
         self.previous_hh = None
 
 class Agent:
-    def __init__(self):
-        intersections = np.array(((1.0,.4,.8,.9,.3),(1.0,.7,.2,.6,.4)))
+    def __init__(self,number_nodes):
+        intersections = np.random.uniform(low = 0.0, high = 1.0, size = (2,number_nodes))
         self.intersections = torch.tensor(np.reshape(intersections,(1,*intersections.shape)),dtype=torch.float32)
         self.state = torch.ones(1,self.intersections.shape[2],dtype=torch.int)
 
@@ -272,13 +270,17 @@ class Agent:
         "Runs a small batch of the simulation"
         new_state = torch.bitwise_and(self.state,action)
         # Run simulation
-        reward = 300
-        return new_state, reward
+        rng = default_rng()
+        reward = torch.tensor([rng.standard_normal(1)+2.0])
+        self.state = new_state.detach()
+        done = False
+        return new_state, reward, done
     
     def reset(self):
         "Resets the simulation environment"
         self.state = torch.ones(1,self.intersections.shape[2],dtype=torch.int)
         return self.state
+
 class ExperienceSourceDataset(IterableDataset):
     """Basic experience source dataset.
     Takes a generate_batch function that returns an iterator. The logic for the experience source and how the batch is
@@ -295,14 +297,16 @@ class ExperienceSourceDataset(IterableDataset):
 class DRL_System(LightningModule):
     def __init__(self, train_size: int = 120000,
                        valid_size: int = 1000, 
-                       hidden_size: int = 128, 
+                       hidden_size: int = 128,
+                       batch_size: int = 100,
                        num_layers: int = 1, 
                        dropout: float = 0.1, 
                        actor_lr: float = 5e-4,
                        critic_lr: float = 5e-4, 
                        state_size: int = 2,
-                       max_num_rsu: int = 15,
+                       max_num_rsu: int = 20,
                        steps_per_epoch: int = 200,
+                       number_nodes: int = 100,
                        w1: int = 1, 
                        w2: int = 0):
         """DRL model for solving RSU placement problem
@@ -326,6 +330,7 @@ class DRL_System(LightningModule):
         self.train_size = train_size
         self.valid_size = valid_size
         self.hidden_size = hidden_size
+        self.batch_size = batch_size
         self.num_layers = num_layers
         self.dropout = dropout
         self.actor_lr = actor_lr
@@ -338,15 +343,16 @@ class DRL_System(LightningModule):
 
         self.actor = Actor(state_size,
                            self.hidden_size,
+                           self.device,
                            self.num_layers,
-                           self.dropout).to(device)
+                           self.dropout).to(self.device)
 
         self.critic = Critic(state_size,
-                             self.hidden_size).to(device)
+                             self.hidden_size).to(self.device)
 
-        self.agent = Agent()
+        self.agent = Agent(number_nodes)
 
-        self.actor_critic = Actor_Critic(self.actor, self.critic, self.agent)
+        self.actor_critic = Actor_Critic(self.actor, self.critic, self.agent, self.device)
 
         self.episode_rewards = []
         self.episode_critic_rewards = []
@@ -360,8 +366,7 @@ class DRL_System(LightningModule):
         self.avg_rewards = 0
         self.avg_ep_rewards = 0
 
-        self.state = self.agent.reset()
-
+        _ = self.agent.reset()
 
     def calculate_advantage(self,rewards,critic_ests):
         """Function to calculate the losses for the actor and critic.
@@ -373,41 +378,45 @@ class DRL_System(LightningModule):
         Returns:
             _type_: _description_
         """
-        advantage = torch.mean(torch.subtract(rewards[:,None],critic_ests))
+        advantage = [rewards[i] - critic_ests[i] for i in range(len(rewards))]
         return advantage
 
     def actor_loss(self,advantage,logps) -> torch.Tensor:
         actor_loss = torch.mean(torch.mul(advantage.detach(),torch.sum(logps)))
+        actor_loss.requires_grad = True
         return actor_loss
 
     def critic_loss(self,advantage) -> torch.Tensor:
         critic_loss = torch.mean(torch.pow(advantage.detach(),2))
+        critic_loss.requires_grad = True
         return critic_loss
 
     def forward(self,x: Tensor) -> Tensor:
         # This must be redone based on the new actor call method, it should still return an RSU network
-        rsu_indicies, _ = self.actor(x)
+        rsu_indicies, _, _ = self.actor_critic(x)
         return rsu_indicies
 
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
-        states, actions, logps, rewards, critic_rewards = batch
+        states, actions, logps, advantages = batch
 
-        actor_loss, critic_loss = self.model_loss(rewards,critic_rewards,logps)
+        advantages = (advantages - advantages.mean())/advantages.std()
+        # print(states,'\n', actions,'\n', logps,'\n', advantages,'\n')
 
+        self.log("avg_ep_reward", self.avg_ep_rewards, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("avg_reward", self.avg_rewards, prog_bar=True, on_step=False, on_epoch=True)
 
-        if optimizer_idx == 0: loss = actor_loss
-        if optimizer_idx == 1: loss = critic_loss
+        if optimizer_idx == 0: 
+            loss_actor = self.actor_loss(advantages,logps)
+            self.log('loss_actor', loss_actor, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            print('\n',"Loss Actor",loss_actor)
+            return loss_actor
 
-        log = {
-            "episodes": self.done_episodes,
-            "reward": self.total_rewards[-1],
-            "train_loss": loss,
-            "avg_reward": self.avg_rewards,
-        }
-
-        # return OrderedDict({"loss": loss, "log": log, "progress_bar": log})
-        return loss
-        
+        if optimizer_idx == 1: 
+            loss_critic = self.critic_loss(advantages)
+            self.log('loss_critic', loss_critic, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            print("Loss critic",loss_critic,'\n')
+            return loss_critic
+     
     def configure_optimizers(self) -> List[Optimizer]:
         """Initializes Adam optimizers for actor and critic.
 
@@ -432,42 +441,40 @@ class DRL_System(LightningModule):
         Next State: np.bitwise_and of States and Action (Adds selected RSU to mask of RSU network)
         """
         for step in range(self.steps_per_epoch):
+            self.batch_states.append(self.agent.state)
 
-            action, logp, critic_reward = self.actor_critic(self.state)
+            action, logp, critic_reward = self.actor_critic(self.agent.state) 
+            _, reward, simulation_done = self.agent.simulation_step(action,self.w1,self.w2)
             
-            # The simulation should never need to end, it only needs to be reset alongside the current RSU solution
-            new_state, reward, simulation_done = self.agent.simulation_step(action,self.w1,self.w2)
-
-            self.state = new_state.detach()
-            
-            self.episode_rewards.append(reward)
-            self.episode_critic_rewards.append(critic_reward)
-            self.batch_logp.append(logp)
-            self.batch_actions.append(action)
-            self.batch_states.append(self.state)
+            self.episode_rewards.append(reward.detach())
+            self.episode_critic_rewards.append(critic_reward.detach())
+            self.batch_logp.append(logp.detach())
+            self.batch_actions.append(action.detach())
 
             # Tests if all the samples for the batch are generated
             epoch_end = step == (self.steps_per_epoch-1) 
             # Tests if the max number of RSUs have been selected
-            terminate_simulation = (self.state.shape[1] - torch.sum(self.state)) == self.max_num_rsu 
+            terminate_simulation = (self.agent.state.shape[1] - torch.sum(self.agent.state)) == self.max_num_rsu 
+            # Test if all intersections are selected
+            terminate_simulation = torch.sum(self.agent.state) == 0.0
 
             if epoch_end or simulation_done or terminate_simulation:
 
-                self.state = self.agent.reset()
+                _ = self.agent.reset()
                 self.actor_critic.reset()
 
-                self.epoch_rewards.append(torch.sum(self.episode_rewards))
+                self.epoch_rewards.append(np.sum(self.episode_rewards))
                 self.batch_adv += self.calculate_advantage(self.episode_rewards,self.episode_critic_rewards)
-                self.episode_rewards = []
-                self.episode_critic_rewards = []
+                self.episode_rewards.clear()
+                self.episode_critic_rewards.clear()
 
             # If the epoch ends
             if epoch_end:
                 # Yield training data for model
                 train_data = zip(self.batch_states, self.batch_actions,self.batch_logp,self.batch_adv)
                 for state, action, logp, advantages in train_data:
+                    # print(state,'\n', action,'\n', logp,'\n', advantages,'\n')
                     yield state, action, logp, advantages
-
                 # Reset history for next epoch
                 self.batch_states.clear()
                 self.batch_actions.clear()
@@ -477,11 +484,11 @@ class DRL_System(LightningModule):
                 # Logging
                 self.avg_rewards = sum(self.epoch_rewards) / self.steps_per_epoch
 
-                total_epoch_reward = torch.sum(self.epoch_rewards)
+                total_epoch_reward = np.sum(self.epoch_rewards)
                 nb_episodes = len(self.epoch_rewards)
                 self.avg_ep_rewards = total_epoch_reward / nb_episodes
 
-                self.epoch_rewards.clear()
+                self.epoch_rewards = []
 
     def _dataloader(self) -> DataLoader:
         """Initialize the Replay Buffer dataset used for retrieving experiences."""
@@ -493,9 +500,11 @@ class DRL_System(LightningModule):
         """Get train loader."""
         return self._dataloader()
 
+        
 if __name__ == '__main__':
-    num_nodes = 100
+
     parser = argparse.ArgumentParser(description='Combinatorial Optimization')
+    parser.add_argument('--number_nodes', default=10, type=float)
     parser.add_argument('--actor_lr', default=5e-4, type=float)
     parser.add_argument('--critic_lr', default=5e-4, type=float)
     parser.add_argument('--batch_size', default=10, type=int)
@@ -504,10 +513,12 @@ if __name__ == '__main__':
     parser.add_argument('--layers', dest='num_layers', default=1, type=int)
     parser.add_argument('--train-size',default=120000, type=int)
     parser.add_argument('--valid-size', default=1000, type=int)
-    args = parser.parse_args()
+
+    args, unknown = parser.parse_known_args()
     T = 100
     w2_list = np.arange(T+1)/T
     w1_list = 1-w2_list
+
     model = DRL_System(**args.__dict__)
-    trainer = Trainer()
+    trainer = Trainer(max_epochs = 1)
     trainer.fit(model)
