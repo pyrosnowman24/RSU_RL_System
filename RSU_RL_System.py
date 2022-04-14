@@ -271,7 +271,8 @@ class Agent:
         new_state = torch.bitwise_and(self.state,action)
         # Run simulation
         rng = default_rng()
-        reward = torch.tensor([rng.standard_normal(1)+2.0])
+        reward = torch.tensor([rng.standard_normal(1)+rng.uniform(1.5,2.5)])
+        # reward = torch.sum(new_state)
         self.state = new_state.detach()
         done = False
         return new_state, reward, done
@@ -305,7 +306,7 @@ class DRL_System(LightningModule):
                        critic_lr: float = 5e-4, 
                        state_size: int = 2,
                        max_num_rsu: int = 20,
-                       steps_per_epoch: int = 200,
+                       episodes_per_epoch: int = 200,
                        number_nodes: int = 100,
                        w1: int = 1, 
                        w2: int = 0):
@@ -337,7 +338,7 @@ class DRL_System(LightningModule):
         self.critic_lr = critic_lr
         self.state_size = state_size
         self.max_num_rsu = max_num_rsu
-        self.steps_per_epoch = steps_per_epoch
+        self.episodes_per_epoch = episodes_per_epoch
         self.w1 = w1
         self.w2 = w2
 
@@ -354,11 +355,16 @@ class DRL_System(LightningModule):
 
         self.actor_critic = Actor_Critic(self.actor, self.critic, self.agent, self.device)
 
+        self.episode_states = np.empty((0,self.agent.state.shape[1]))
+        self.episode_actions = np.empty((0,self.agent.state.shape[1]))
+        self.episode_logp = np.empty((0,1))
+        self.episode_adv = []
         self.episode_rewards = []
         self.episode_critic_rewards = []
+
+        self.batch_states = []
         self.batch_actions = []
         self.batch_logp = []
-        self.batch_states = []
         self.batch_adv = []
 
         self.epoch_rewards = []
@@ -378,7 +384,7 @@ class DRL_System(LightningModule):
         Returns:
             _type_: _description_
         """
-        advantage = [rewards[i] - critic_ests[i] for i in range(len(rewards))]
+        advantage = [(rewards[i] - critic_ests[i])[0][0] for i in range(len(rewards))]
         return advantage
 
     def actor_loss(self,advantage,logps) -> torch.Tensor:
@@ -399,8 +405,8 @@ class DRL_System(LightningModule):
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
         states, actions, logps, advantages = batch
 
-        advantages = (advantages - advantages.mean())/advantages.std()
-        # print(states,'\n', actions,'\n', logps,'\n', advantages,'\n')
+        # advantages = (advantages - advantages.mean())/advantages.std()
+        print(states.shape,'\n', actions.shape,'\n', logps.shape,'\n', advantages.shape,'\n') # Shape is (Batch_size,size of RSU network, number of intersections)
 
         self.log("avg_ep_reward", self.avg_ep_rewards, prog_bar=True, on_step=False, on_epoch=True)
         self.log("avg_reward", self.avg_rewards, prog_bar=True, on_step=False, on_epoch=True)
@@ -408,13 +414,13 @@ class DRL_System(LightningModule):
         if optimizer_idx == 0: 
             loss_actor = self.actor_loss(advantages,logps)
             self.log('loss_actor', loss_actor, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            print('\n',"Loss Actor",loss_actor)
+            # print('\n',"Loss Actor",loss_actor)
             return loss_actor
 
         if optimizer_idx == 1: 
             loss_critic = self.critic_loss(advantages)
             self.log('loss_critic', loss_critic, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            print("Loss critic",loss_critic,'\n')
+            # print("Loss critic",loss_critic,'\n')
             return loss_critic
      
     def configure_optimizers(self) -> List[Optimizer]:
@@ -440,55 +446,68 @@ class DRL_System(LightningModule):
         Critic Reward: Estimation of the reward by the Critic
         Next State: np.bitwise_and of States and Action (Adds selected RSU to mask of RSU network)
         """
-        for step in range(self.steps_per_epoch):
-            self.batch_states.append(self.agent.state)
+        for episode in range(self.episodes_per_epoch):
+            terminate_simulation = False # Tests if the episode should end
+            epoch_end = False # Tests if the epoch should end
+            while not terminate_simulation:
+                self.episode_states = np.vstack((self.episode_states,self.agent.state.numpy()[0]))
 
-            action, logp, critic_reward = self.actor_critic(self.agent.state) 
-            _, reward, simulation_done = self.agent.simulation_step(action,self.w1,self.w2)
-            
-            self.episode_rewards.append(reward.detach())
-            self.episode_critic_rewards.append(critic_reward.detach())
-            self.batch_logp.append(logp.detach())
-            self.batch_actions.append(action.detach())
+                action, logp, critic_reward = self.actor_critic(self.agent.state) 
+                _, reward, simulation_done = self.agent.simulation_step(action,self.w1,self.w2)
+                
+                self.episode_logp = np.vstack((self.episode_logp,logp.detach().numpy()[0][0]))
 
-            # Tests if all the samples for the batch are generated
-            epoch_end = step == (self.steps_per_epoch-1) 
-            # Tests if the max number of RSUs have been selected
-            terminate_simulation = (self.agent.state.shape[1] - torch.sum(self.agent.state)) == self.max_num_rsu 
-            # Test if all intersections are selected
-            terminate_simulation = torch.sum(self.agent.state) == 0.0
+                self.episode_actions = np.vstack((self.episode_actions, action.detach().numpy()))
 
-            if epoch_end or simulation_done or terminate_simulation:
+                self.episode_rewards.append(reward.detach().numpy())
+                self.episode_critic_rewards.append(critic_reward.detach().numpy())
 
-                _ = self.agent.reset()
-                self.actor_critic.reset()
+                # Tests if all the samples for the batch are generated
+                # Tests if the max number of RSUs have been selected or all intersections have been selected
+                terminate_simulation = (self.agent.state.shape[1] - torch.sum(self.agent.state)) == self.max_num_rsu or torch.sum(self.agent.state) == 0.0
+                epoch_end = episode == self.episodes_per_epoch-1
 
-                self.epoch_rewards.append(np.sum(self.episode_rewards))
-                self.batch_adv += self.calculate_advantage(self.episode_rewards,self.episode_critic_rewards)
-                self.episode_rewards.clear()
-                self.episode_critic_rewards.clear()
+                if simulation_done or terminate_simulation:
 
-            # If the epoch ends
+                    _ = self.agent.reset()
+                    self.actor_critic.reset()
+
+                    self.epoch_rewards.append(np.sum(self.episode_rewards))
+                    self.episode_adv = np.array(self.calculate_advantage(self.episode_rewards,self.episode_critic_rewards),ndmin=2).transpose()
+
+                    self.batch_states.append(torch.from_numpy(self.episode_states))
+                    self.batch_actions.append(torch.from_numpy(self.episode_actions))
+                    self.batch_logp.append(torch.from_numpy(self.episode_logp))
+                    self.batch_adv.append(torch.from_numpy(self.episode_adv))
+                        
+                    self.episode_states = np.empty((0,self.agent.state.shape[1]))
+                    self.episode_actions = np.empty((0,self.agent.state.shape[1]))
+                    self.episode_logp = np.empty((0,1))
+                    self.episode_adv = []
+                    self.episode_rewards = []
+                    self.episode_critic_rewards = []
             if epoch_end:
                 # Yield training data for model
+                # print(self.batch_states,'\n', self.batch_actions,'\n',self.batch_logp,'\n',self.batch_adv,'\n')
                 train_data = zip(self.batch_states, self.batch_actions,self.batch_logp,self.batch_adv)
                 for state, action, logp, advantages in train_data:
                     # print(state,'\n', action,'\n', logp,'\n', advantages,'\n')
                     yield state, action, logp, advantages
+
                 # Reset history for next epoch
                 self.batch_states.clear()
                 self.batch_actions.clear()
                 self.batch_logp.clear()
                 self.batch_adv.clear()
 
-                # Logging
-                self.avg_rewards = sum(self.epoch_rewards) / self.steps_per_epoch
+            # Logging
+            self.avg_rewards = sum(self.epoch_rewards) / self.episodes_per_epoch
 
-                total_epoch_reward = np.sum(self.epoch_rewards)
-                nb_episodes = len(self.epoch_rewards)
-                self.avg_ep_rewards = total_epoch_reward / nb_episodes
+            total_epoch_reward = np.sum(self.epoch_rewards)
+            nb_episodes = len(self.epoch_rewards)
+            self.avg_ep_rewards = total_epoch_reward / nb_episodes
 
-                self.epoch_rewards = []
+            self.epoch_rewards = []
 
     def _dataloader(self) -> DataLoader:
         """Initialize the Replay Buffer dataset used for retrieving experiences."""
@@ -504,16 +523,17 @@ class DRL_System(LightningModule):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Combinatorial Optimization')
-    parser.add_argument('--number_nodes', default=10, type=float)
+    parser.add_argument('--number_nodes', default=50, type=float)
     parser.add_argument('--actor_lr', default=5e-4, type=float)
     parser.add_argument('--critic_lr', default=5e-4, type=float)
-    parser.add_argument('--batch_size', default=10, type=int)
+    parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--hidden', dest='hidden_size', default=128, type=int)
     parser.add_argument('--dropout', default=0.1, type=float)
     parser.add_argument('--layers', dest='num_layers', default=1, type=int)
     parser.add_argument('--train-size',default=120000, type=int)
     parser.add_argument('--valid-size', default=1000, type=int)
-
+    parser.add_argument('--max_num_rsu', default=20, type=int)
+    parser.add_argument('--episodes_per_epoch', default=32, type=int)
     args, unknown = parser.parse_known_args()
     T = 100
     w2_list = np.arange(T+1)/T
