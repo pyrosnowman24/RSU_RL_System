@@ -13,8 +13,9 @@ from torch.utils.data.dataset import IterableDataset
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+from Agent import Agent
+
 import numpy as np
-from numpy.random import default_rng
 import argparse
 
 # This is a advantage actor-critic model
@@ -260,28 +261,6 @@ class Actor_Critic(nn.Module):
         self.previous_action = None
         self.previous_hh = None
 
-class Agent:
-    def __init__(self,number_nodes):
-        intersections = np.random.uniform(low = 0.0, high = 1.0, size = (2,number_nodes))
-        self.intersections = torch.tensor(np.reshape(intersections,(1,*intersections.shape)),dtype=torch.float32)
-        self.state = torch.ones(1,self.intersections.shape[2],dtype=torch.int)
-
-    def simulation_step(self,action,w1,w2):
-        "Runs a small batch of the simulation"
-        new_state = torch.bitwise_and(self.state,action)
-        # Run simulation
-        rng = default_rng()
-        reward = torch.tensor([rng.standard_normal(1)+rng.uniform(1.5,2.5)])
-        # reward = torch.sum(new_state)
-        self.state = new_state.detach()
-        done = False
-        return new_state, reward, done
-    
-    def reset(self):
-        "Resets the simulation environment"
-        self.state = torch.ones(1,self.intersections.shape[2],dtype=torch.int)
-        return self.state
-
 class ExperienceSourceDataset(IterableDataset):
     """Basic experience source dataset.
     Takes a generate_batch function that returns an iterator. The logic for the experience source and how the batch is
@@ -404,10 +383,8 @@ class DRL_System(LightningModule):
 
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
         states, actions, logps, advantages = batch
-
         # advantages = (advantages - advantages.mean())/advantages.std()
         print(states.shape,'\n', actions.shape,'\n', logps.shape,'\n', advantages.shape,'\n') # Shape is (Batch_size,size of RSU network, number of intersections)
-
         self.log("avg_ep_reward", self.avg_ep_rewards, prog_bar=True, on_step=False, on_epoch=True)
         self.log("avg_reward", self.avg_rewards, prog_bar=True, on_step=False, on_epoch=True)
 
