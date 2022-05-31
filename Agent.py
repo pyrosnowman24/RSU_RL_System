@@ -29,7 +29,8 @@ class Agent:
     def setup_environment(self):
         # This will setup similar things to the cnn setup, stuff like the world image, the transforms, the size of the samples, ect.
         #
-        self.omnet_dimensions = [10100,6500]
+        #The omnet dimensions are the actual boundries for the network, the playground boundries are larger then the actual area.
+        self.omnet_dimensions = [22.67,9.0,10005,6387.01]
 
 # Functions to interact with the simulation.
 
@@ -163,9 +164,7 @@ class Agent:
         lines = f.readlines()
         self.create_projection(lines)
         intersections = self.find_junctions(lines)
-        for intersection in intersections[:5,:]:
-            print(intersection[0],intersection[1])
-        return intersections[:5,:]
+        return intersections
 
     def find_junctions(self,lines):
         intersections = np.empty((0,3))
@@ -191,9 +190,11 @@ class Agent:
             if "<location " in line:
                 projection_vars = re.search('projParameter=\"(.*?)\"', line).group(1)
                 offset = re.search('netOffset=\"(.*?)\"', line).group(1).split(',')
+                boundry = re.search('convBoundary=\"(.*?)\"', line).group(1).split(',')
                 break
         self.offset = [float(x) for x in offset]
         self.projection = pyproj.Proj(projection_vars)
+        self.traciBoundry = [float(x) for x in boundry]
 
     def traci2geospatial(self,x,y):
         x -= self.offset[0]
@@ -201,7 +202,10 @@ class Agent:
         return self.projection(x,y,inverse=True)
 
     def traci2omnet(self,x,y):
-        y = self.omnet_dimensions[1] - y
+        x = x + self.omnet_dimensions[0]
+        y = y / self.traciBoundry[3]
+        y = y * self.omnet_dimensions[3]
+        y = self.omnet_dimensions[3] - y + self.omnet_dimensions[1]
         return [x,y]
 
 
