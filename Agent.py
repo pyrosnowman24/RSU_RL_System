@@ -60,6 +60,7 @@ class Agent:
         self.state = new_state.clone()
         process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True)
         process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
+        # process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
 
@@ -300,11 +301,11 @@ class Agent:
                 else: continue
                 z = re.search('z=\"(.*?)\" ', line)
                 if z is not None: z = float(z.group(1))
-                else: continue
+                else: z = 0
                 coords = np.array((x,y,z))
                 coords = np.reshape(coords,(1,3))
                 coords[0,:2] = self.traci2omnet(coords[0,0],coords[0,1])
-                intersections = np.append(intersections, coords, axis=0) 
+                intersections = np.append(intersections, coords, axis=0)
         return intersections
 
     def create_projection(self,lines):
@@ -324,9 +325,9 @@ class Agent:
         return self.projection(x,y,inverse=True)
 
     def traci2omnet(self,x,y):
+        x = x - self.traciBoundry[0]
         x = x + self.omnet_dimensions[0]
-        y = y / self.traciBoundry[3]
-        y = y * self.omnet_dimensions[3]
+        y = y - self.traciBoundry[1]
         y = self.omnet_dimensions[3] - y + self.omnet_dimensions[1]
         return [x,y]
 
