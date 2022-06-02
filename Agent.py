@@ -11,17 +11,18 @@ import pandas as pd
 
 class Agent:
     # This class will be responsible for keeping track of the current simulation and the environment for the simulation (sumo stuff)
-    def __init__(self):
+    def __init__(self,rsu_limit = 0):
         self.setup_paths()
         self.setup_simulation(index=0)
         self.intersections = torch.Tensor(self.prepare_intersections())
         self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int) # Mask of values in RSU network, 1 is not included, 0 is included
+        self.rsu_limit = rsu_limit
 
     def setup_paths(self):
         self.parent_dir ="/home/acelab/veins_sim/"
         self.simulation_dir = os.path.join(self.parent_dir,"veins/examples/veins/")
         self.simulation_info = os.path.join(self.simulation_dir,"simulation_info.csv")
-        self.simulation_info = "$(cwd)/simulation_info.csv"
+        self.simulation_variables_db = pd.read_csv(self.simulation_info)
         self.logs_dir = os.path.join(self.parent_dir,"logs/")
         self.omnet_ini = os.path.join(self.simulation_dir,"omnetpp.ini")
         self.scenario_ned = os.path.join(self.simulation_dir,'RSUExampleScenario.ned')
@@ -30,8 +31,7 @@ class Agent:
     def setup_simulation(self,index=0):
         # This will setup similar things to the cnn setup, stuff like the world image, the transforms, the size of the samples, ect.
         #
-        simulation_variables_db = pd.read_csv(self.simulation_info)
-        new_simulation_variables_db = simulation_variables_db.iloc[index,:]
+        new_simulation_variables_db = self.simulation_variables_db.iloc[index,:]
         
         self.sumo_scenario_dir = os.path.join(self.simulation_dir,new_simulation_variables_db.loc["sim_path"])
         self.sumo_net_xml = os.path.join(self.sumo_scenario_dir,new_simulation_variables_db.loc["net_name"])
@@ -68,11 +68,21 @@ class Agent:
         features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
         reward = self.reward(features,W)
 
+        if torch.sum(new_state) == self.rsu_limit: # Checks if the limit on RSUs has been reached
+            done = True
+
         return new_state, reward, done
     
     def reset(self):
         "Resets the simulation environment"
+        # Selects a new simulation from list of potential environments then sets up the environment 
+        new_sim_index = np.random.randint(0,self.simulation_variables_db.shape[0])
+        self.setup_simulation(new_sim_index)
+
+        # Identifies the intersections in the new environment and resets state for new environment
+        self.intersections = torch.Tensor(self.prepare_intersections())
         self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int)
+
         return self.state
 
     def reward(self,features,W):
