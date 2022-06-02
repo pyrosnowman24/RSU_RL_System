@@ -1,3 +1,4 @@
+from audioop import avg
 from importlib.resources import path
 import torch
 import numpy as np
@@ -6,54 +7,81 @@ import os
 import subprocess
 import re
 import pyproj
+import pandas as pd
 
 class Agent:
     # This class will be responsible for keeping track of the current simulation and the environment for the simulation (sumo stuff)
     def __init__(self):
         self.setup_paths()
-        self.setup_environment()
-        self.intersections = self.prepare_intersections()
-        self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int)
-        self.place_rsu_network(self.intersections)
+        self.setup_simulation(index=0)
+        self.intersections = torch.Tensor(self.prepare_intersections())
+        self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int) # Mask of values in RSU network, 1 is not included, 0 is included
 
     def setup_paths(self):
         self.parent_dir ="/home/acelab/veins_sim/"
-        self.simulation_dir ="/home/acelab/veins_sim/veins/examples/veins/"
-        self.sumo_scenario_dir ="/home/acelab/veins_sim/veins/examples/veins/scenario/"
-        self.logs_dir = "/home/acelab/veins_sim/logs/"
+        self.simulation_dir = os.path.join(self.parent_dir,"veins/examples/veins/")
+        self.simulation_info = os.path.join(self.simulation_dir,"simulation_info.csv")
+        self.logs_dir = os.path.join(self.parent_dir,"logs/")
         self.omnet_ini = os.path.join(self.simulation_dir,"omnetpp.ini")
         self.scenario_ned = os.path.join(self.simulation_dir,'RSUExampleScenario.ned')
         self.omnet_results_file = os.path.join(self.simulation_dir,"results/General-#0.sca")
-        self.sumo_net_xml = os.path.join(self.sumo_scenario_dir,"net.net.xml")
 
-    def setup_environment(self):
+    def setup_simulation(self,index=0):
         # This will setup similar things to the cnn setup, stuff like the world image, the transforms, the size of the samples, ect.
         #
-        #The omnet dimensions are the actual boundries for the network, the playground boundries are larger then the actual area.
-        self.omnet_dimensions = [22.67,9.0,10005,6387.01]
+        simulation_variables_db = pd.read_csv(self.simulation_info)
+        new_simulation_variables_db = simulation_variables_db.iloc[index,:]
+        
+        self.sumo_scenario_dir = os.path.join(self.simulation_dir,new_simulation_variables_db.loc["sim_path"])
+        self.sumo_net_xml = os.path.join(self.sumo_scenario_dir,new_simulation_variables_db.loc["net_name"])
+        self.sumo_launchd_file = os.path.join(self.sumo_scenario_dir,new_simulation_variables_db.loc["launchd_name"])
+        playground_size = new_simulation_variables_db.loc[["playground_x","playground_y","playground_z"]].to_numpy()
+        self.omnet_dimensions = new_simulation_variables_db.loc[["min_omnet_x","min_omnet_y","max_omnet_x","max_omnet_y"]].to_numpy()
+        simulation_time = new_simulation_variables_db[["start_time","stop_time"]].to_numpy()
+
+        self.update_omnet_playground(playground_size)
+        self.update_omnet_simulation_time(simulation_time)
+        self.update_omnet_launchd()
+
 
 # Functions to interact with the simulation.
 
-    def simulation_step(self,action,w1,w2):
-        # new_state = torch.bitwise_and(self.state,action)
+    def simulation_step(self,action,W=[.5,.5]):
+        # Receive new action, add it to the state, then gather intersections in RSU network
+        done = False
+        new_state = torch.bitwise_and(self.state,action)
+        rsu_network = torch.Tensor(0,3)
+        bool_mask = torch.where(new_state>0.,False,True)
+        for i,row_mask in enumerate(bool_mask[0,:]):
+            if row_mask:
+                rsu_network = torch.cat((rsu_network,self.intersections[i,:][None,:]),0)
+        self.place_rsu_network(rsu_network)
 
-        process1 = subprocess.Popen("./run.sh ",cwd=self.parent_dir,shell=True)
+        self.state = new_state.clone()
+        process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True)
         process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
-        # process2 = subprocess.Popen("./run",cwd="/home/acelab/veins_sim/veins/examples/veins/",shell=True)
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
 
-        features = self.collect_all_results()
-        print(features)
-        # return new_state, reward, done
+        features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
+        reward = self.reward(features,W)
+
+        return new_state, reward, done
     
     def reset(self):
         "Resets the simulation environment"
-        self.state = torch.ones(1,self.intersections.shape[2],dtype=torch.int)
+        self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int)
         return self.state
 
+    def reward(self,features,W):
+        avg_features = np.nanmean(features,axis=1)
+        avg_features[0] = 1/avg_features[0]*-1000
+        avg_features[1] = avg_features[1]/10
+        reward = np.multiply(avg_features,W)
+        reward = np.sum(reward)
+        return reward
 
-# Functions to add RSU network to necessary files
+# Functions to update the simulation
 
     def place_rsu_network(self,intersections):
         self.update_omnet_ini(intersections)
@@ -100,6 +128,72 @@ class Agent:
             f.write(line)
         f.truncate()
 
+    def update_omnet_playground(self,playground_size):
+        f = open(self.omnet_ini,"r+")
+        lines = f.readlines()
+
+        start_index,end_index = self.find_playground_text(lines)
+
+        text_begining = lines[:start_index-1]
+        text_end = lines[end_index:]
+
+        playground_text = []
+
+        playground_text.append("*.playgroundSizeX = {}m\n".format(playground_size[0]))
+        playground_text.append("*.playgroundSizeY = {}m\n".format(playground_size[1]))
+        playground_text.append("*.playgroundSizeZ = {}m\n".format(playground_size[2]))
+
+        new_lines = text_begining+playground_text+text_end
+
+        f.seek(0)
+        for line in new_lines:
+            f.write(line)
+        f.truncate()
+
+    def update_omnet_simulation_time(self,simulation_time):
+        f = open(self.omnet_ini,"r+")
+        lines = f.readlines()
+
+        start_index,end_index = self.find_simulation_time_text(lines)
+
+        text_begining = lines[:start_index-1]
+        text_end = lines[end_index:]
+
+        sim_time_text = []
+
+        sim_time_text.append("*.manager.firstStepAt = {}s\n".format(simulation_time[0]))
+        sim_time_text.append("sim-time-limit = {}s\n".format(simulation_time[1]))
+
+        new_lines = text_begining+sim_time_text+text_end
+
+        f.seek(0)
+        for line in new_lines:
+            f.write(line)
+        f.truncate()
+
+    def update_omnet_launchd(self):
+        f = open(self.omnet_ini,"r+")
+        lines = f.readlines()
+        desired_string = "*.manager.launchConfig ="
+        for i, line in enumerate(lines):
+            if desired_string in line:
+                index = i + 1
+                break
+
+        text_begining = lines[:index-1]
+        text_end = lines[index:]
+
+        sim_time_text = []
+
+        sim_time_text.append("*.manager.launchConfig = xmldoc(\"{}\")\n".format(self.sumo_launchd_file))
+
+        new_lines = text_begining+sim_time_text+text_end
+
+        f.seek(0)
+        for line in new_lines:
+            f.write(line)
+        f.truncate()
+
     def add_RSU(self,index,rsu_coords,rsu_text):
         rsu_coord_string = lambda index, coord, position : "*.rsu[{}].mobility.{} = {}\n".format(index,coord,position)
         rsu_text.append(rsu_coord_string(index,'x',rsu_coords[0]))
@@ -111,8 +205,6 @@ class Agent:
         end_string = "*.rsu[*].applType = \"TraCIDemoRSU11p\""
         start_index = 0
         end_index = 0
-        iter_start_index = True
-        iter_end_index = True
 
         for i, line in enumerate(lines):
 
@@ -123,6 +215,36 @@ class Agent:
                 break
         start_index += 3 # Adds three to get past the header in the file for the RSU section
         end_index -=2 # Subtracts two to go above the end line, which shouldnt be deleted
+        return start_index,end_index
+
+    def find_playground_text(self,lines):
+        start_string = "*.playgroundSizeX ="
+        end_string = "*.playgroundSizeZ ="
+        start_index = 0
+        end_index = 0
+
+        for i, line in enumerate(lines):
+
+            if start_string in line:
+                start_index = i + 1
+            if end_string in line:
+                end_index = i + 1
+                break
+        return start_index,end_index
+
+    def find_simulation_time_text(self,lines):
+        start_string = "*.manager.firstStepAt ="
+        end_string = "sim-time-limit ="
+        start_index = 0
+        end_index = 0
+
+        for i, line in enumerate(lines):
+
+            if start_string in line:
+                start_index = i + 1
+            if end_string in line:
+                end_index = i + 1
+                break
         return start_index,end_index
 
 # Functions to collect the results of a simulation
@@ -208,6 +330,9 @@ class Agent:
         y = self.omnet_dimensions[3] - y + self.omnet_dimensions[1]
         return [x,y]
 
-
 intersections = np.random.rand(5,3)
 sim_rsu_place = Agent()
+action = sim_rsu_place.state
+action[:,:4] = 0
+
+sim_rsu_place.simulation_step(action)
