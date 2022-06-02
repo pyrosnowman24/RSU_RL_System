@@ -21,6 +21,7 @@ class Agent:
         self.parent_dir ="/home/acelab/veins_sim/"
         self.simulation_dir = os.path.join(self.parent_dir,"veins/examples/veins/")
         self.simulation_info = os.path.join(self.simulation_dir,"simulation_info.csv")
+        self.simulation_info = "$(cwd)/simulation_info.csv"
         self.logs_dir = os.path.join(self.parent_dir,"logs/")
         self.omnet_ini = os.path.join(self.simulation_dir,"omnetpp.ini")
         self.scenario_ned = os.path.join(self.simulation_dir,'RSUExampleScenario.ned')
