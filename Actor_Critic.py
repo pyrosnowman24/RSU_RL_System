@@ -214,7 +214,10 @@ class Critic(nn.Module):
         return output
 
 class Actor_Critic(nn.Module):
-    def __init__(self, actor_net: nn.Module, critic_net: nn.Module, agent, device = 'cpu') -> None:
+    def __init__(self, actor_net: nn.Module, 
+                       critic_net: nn.Module, 
+                       agent, 
+                       device = 'cpu') -> None:
         super().__init__()
         self.actor_net = actor_net
         self.critic_net = critic_net
@@ -227,7 +230,7 @@ class Actor_Critic(nn.Module):
     def forward(self,state: torch.Tensor) -> Tuple:
         state = state.to(self.device)
         intersections = self.agent.intersections
-
+        # rsu_intersections = torch.gather(intersections, 1, torch.argmin(state).expand(*intersections.shape)).detach()
         # if len(self.batch_actions) == 0: previous_action = None # If there was no previous action
         # else: previous_action = self.batch_actions[-1]
 

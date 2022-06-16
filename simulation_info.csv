@@ -1,3 +1,4 @@
 ,sim_name,sim_path,launchd_name,net_name,playground_x,playground_y,playground_z,start_time,stop_time,min_omnet_x,min_omnet_y,max_omnet_x,max_omnet_y
 0,MOST,MOST/,most.launchd.xml,net.net.xml,10100,6500,700,25000,25050,22.67,0,10005,6387.01
 1,example_scenario,example_scenario,erlangen.launchd.xml,erlangen.net.xml,2640,3040,50,0,200,23.38,0,2633.1,3036.05
+0,MOST_short,MOST/,most.launchd.xml,net.net.xml,10100,6500,700,25000,25020,22.67,0,10005,6387.01

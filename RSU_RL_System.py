@@ -190,6 +190,8 @@ class DRL_System(LightningModule):
             while not terminate_simulation:
                 self.episode_states = np.vstack((self.episode_states,self.agent.state.numpy()[0]))
                 action, logp, critic_reward = self.actor_critic(self.agent.state[None,:,:]) 
+                
+                quit()
                 _, reward, simulation_done = self.agent.simulation_step(action,self.W)
                 
                 self.episode_logp = np.vstack((self.episode_logp,logp.detach().numpy()[0][0]))

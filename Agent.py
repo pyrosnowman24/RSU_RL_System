@@ -11,12 +11,10 @@ import pandas as pd
 
 class Agent:
     # This class will be responsible for keeping track of the current simulation and the environment for the simulation (sumo stuff)
-    def __init__(self,rsu_limit = 0):
+    def __init__(self):
         self.setup_paths()
         self.setup_simulation(index=0)
-        self.intersections = torch.Tensor(self.prepare_intersections())
-        self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int) # Mask of values in RSU network, 1 is not included, 0 is included
-        self.rsu_limit = rsu_limit
+        self.network_intersections = torch.Tensor(self.prepare_intersections()) # The coordinates of all intersections
 
     def setup_paths(self):
         self.parent_dir ="/home/acelab/veins_sim/"
@@ -47,43 +45,23 @@ class Agent:
 
 # Functions to interact with the simulation.
 
-    def simulation_step(self,action,W=[.5,.5]):
+    def simulation_step(self,rsu_network_idx,sim_idx,W=[.5,.5]):
         # Receive new action, add it to the state, then gather intersections in RSU network
-        done = False
-        new_state = torch.bitwise_and(self.state,action)
-        rsu_network = torch.Tensor(0,3)
-        bool_mask = torch.where(new_state>0.,False,True)
-        for i,row_mask in enumerate(bool_mask[0,:]):
-            if row_mask:
-                rsu_network = torch.cat((rsu_network,self.intersections[i,:][None,:]),0)
+        
+        rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
         self.place_rsu_network(rsu_network)
 
-        self.state = new_state.clone()
         process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True)
-        process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
-        # process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
+        # process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
+        process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
 
         features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
         reward = self.reward(features,W)
 
-        if torch.sum(new_state) == self.rsu_limit: # Checks if the limit on RSUs has been reached
-            done = True
-
-        return new_state, reward, done
+        return reward
     
-    def reset(self):
-        "Resets the simulation environment"
-        # Selects a new simulation from list of potential environments then sets up the environment 
-        new_sim_index = np.random.randint(0,self.simulation_variables_db.shape[0])
-        self.setup_simulation(new_sim_index)
-
-        # Identifies the intersections in the new environment and resets state for new environment
-        self.intersections = torch.Tensor(self.prepare_intersections())
-        self.state = torch.ones(1,self.intersections.shape[0],dtype=torch.int)
-
-        return self.state
 
     def reward(self,features,W):
         avg_features = np.nanmean(features,axis=1)
@@ -342,9 +320,38 @@ class Agent:
         y = self.omnet_dimensions[3] - y + self.omnet_dimensions[1]
         return [x,y]
 
-intersections = np.random.rand(5,3)
-sim_rsu_place = Agent()
-action = sim_rsu_place.state
-action[:,:4] = 0
+    def get_simulation_rsu_network(self,
+                                   rsu_net_idx,
+                                   sim_idx):
+        """Given the RSU network IDs and the IDs of the available intersections in that simulation,
+           returns the coordinates of the intersections in that RSU network.
 
-sim_rsu_place.simulation_step(action)
+        Args:
+            rsu_net_idx (numpy.ndArray): Indices of the RSU network intersections in the simulated subset of intersections.
+            sim_idx (numpy.ndArray): Indices of the simulated subset of intersections in the complete list of intersections.
+
+        Returns:
+            numpy.ndArray: Array of coordinates for the RSU network.
+        """
+        intersections = self.network_intersections[sim_idx[rsu_net_idx],:]
+        return intersections
+
+    def get_simulated_intersections(self,idx):
+        """Given an array of indices for a subset of intersections, 
+           returns an array of coordinates for the subset of intersections.
+
+        Args:
+            idx (numpy.ndArray): Array of indices for the subset of intersections in the complete list of intersections.
+
+        Returns:
+            numpy.ndArray: Array of coordinates for the subset of intersections.
+        """
+        intersections = self.network_intersections[idx,:]
+        return intersections
+
+# sim_rsu_place = Agent()
+
+# intersection_ids = np.random.choice(sim_rsu_place.network_intersections.shape[0],size = 10,replace=False)
+# rsu_ids = np.random.choice(intersection_ids.shape[0],size = 5,replace=False)
+
+# sim_rsu_place.simulation_step(rsu_ids,intersection_ids)
