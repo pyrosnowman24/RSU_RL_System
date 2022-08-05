@@ -67,7 +67,11 @@ class DRL_System(LightningModule):
         return self.actor_critic(x)
 
     def training_step(self,batch):
-        print(2)
+        intersections = batch[0]
+        intersection_idx = batch[1]
+        rsu_network_idx = batch[2]
+        mask = batch[3]
+        self.actor_critic(intersections,intersection_idx,rsu_network_idx,mask)
 
     def validation_step(self,batch):
         print(3)
@@ -80,6 +84,6 @@ class DRL_System(LightningModule):
 simulation_agent = Agent()
 model = DRL_System(simulation_agent)
 trainer = Trainer(max_epochs = 50)
-datamodule = test_datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=3)
+datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=3)
 
 trainer.fit(model,datamodule=datamodule)

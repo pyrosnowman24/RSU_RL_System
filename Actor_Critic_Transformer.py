@@ -115,11 +115,9 @@ class Actor(nn.Module):
                       W = [.5,.5],
                       c_inputs = 3,
                       c_embed = 16,
-                      n_layers = 1,
-                      batch_size = 1):
+                      n_layers = 1):
         super(Actor,self).__init__()
         self.c_embed = c_embed
-        self.batch_size = batch_size
         self.embedding = Embedding(c_inputs,c_embed)
         self.encoder = Encoder(c_embed,nhead,n_layers)
         self.decoder = Decoder(c_embed,nhead,n_layers)
@@ -128,7 +126,7 @@ class Actor(nn.Module):
         
         
 
-    def forward(self,intersections):
+    def forward(self,intersections,mask):
         # print("Input shape",intersections.shape)
 
         embedded_state = self.embedding(intersections)
@@ -147,6 +145,7 @@ class Actor(nn.Module):
             # print("decoder_state",decoder_state.shape)
 
             log_pointer_score = self.pointer(decoder_state,encoder_state)
+            # print("Pointer output shape",log_pointer_score.shape)
             _, masked_argmax = self.tensor_max(log_pointer_score, dim=-1)
             # print("masked argmax",masked_argmax)
 
@@ -156,8 +155,7 @@ class Actor(nn.Module):
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)
             # print('\n')
-
-            next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(self.batch_size, -1, self.c_embed)
+            next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(intersections.shape[0], -1, self.c_embed)
             decoder_input = torch.cat((encoder_state[:,:1,:], torch.gather(encoder_state, dim=1, index=next_indices)), dim=1)
 
         log_pointer_scores = torch.stack(log_pointer_scores, dim=1)
@@ -205,8 +203,12 @@ class Actor_Critic(nn.Module):
         super(Actor_Critic,self).__init__()
         self.actor = Actor(num_features,nhead,W = W, n_layers = n_layers)
 
-    def forward(self,batch_data: torch.Tensor):
-        intersections_batch = torch.unsqueeze(batch_data,0)
-        log_pointer_scores, pointer_argmaxs = self.actor(intersections_batch)
+    def forward(self,intersections: torch.Tensor,
+                     intersection_idx: torch.Tensor,
+                     rsu_network_idx: torch.Tensor,
+                     mask: torch.Tensor):
+
+        log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
         # print(log_pointer_scores[-1,:,:])
         print(pointer_argmaxs)
+

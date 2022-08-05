@@ -61,7 +61,6 @@ class Agent:
         reward = self.reward(features,W)
 
         return reward
-    
 
     def reward(self,features,W):
         avg_features = np.nanmean(features,axis=1)
@@ -354,4 +353,4 @@ class Agent:
 # intersection_ids = np.random.choice(sim_rsu_place.network_intersections.shape[0],size = 10,replace=False)
 # rsu_ids = np.random.choice(intersection_ids.shape[0],size = 5,replace=False)
 
-# sim_rsu_place.simulation_step(rsu_ids,intersection_ids)
+# reward = sim_rsu_place.simulation_step(rsu_ids,intersection_ids)

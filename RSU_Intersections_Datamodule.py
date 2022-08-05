@@ -34,9 +34,9 @@ class RSU_Intersection_Dataset(Dataset):
         intersection_idx = self.sim_idx_array[idx]
         rsu_network_idx = self.rsu_idx_array[idx]
 
-        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask_intersections, mask_rsu = self.pad_item(intersections, intersection_idx,rsu_network_idx)
+        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
 
-        return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask_intersections, mask_rsu
+        return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask
 
     def pad_item(self,
                  intersections: list,
@@ -48,18 +48,40 @@ class RSU_Intersection_Dataset(Dataset):
         intersection_idx_padded = np.zeros((self.max_intersections),dtype=np.int64)
         rsu_network_idx_padded = np.zeros((self.max_pre_rsu_network),dtype=np.int64)
 
-        mask_intersections = np.zeros((self.max_intersections),dtype=np.uint8)
-        mask_rsu = np.zeros((self.max_pre_rsu_network),dtype=np.uint8)
+        intersection_mask = np.zeros((self.max_intersections),dtype=np.uint8)
+        rsu_mask = np.zeros((self.max_pre_rsu_network),dtype=np.uint8)
 
 
         intersections_padded[:intersections.shape[0],:intersections.shape[1]] = intersections
         intersection_idx_padded[:len(intersections_idx)] = intersections_idx
         rsu_network_idx_padded[:len(rsu_network_idx)] = rsu_network_idx
 
-        mask_intersections[:len(intersections_idx)] = 1
-        mask_rsu[:len(rsu_network_idx)] = 1
+        intersection_mask[:len(intersections_idx)] = 1
+        rsu_mask[:len(rsu_network_idx)] = 1
 
-        return intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask_intersections, mask_rsu
+        intersection_mask = np.where(intersection_mask == 1, True, False)
+        rsu_mask = np.where(rsu_mask == 1, True, False)
+
+        mask = self.combine_masks(intersection_mask,rsu_network_idx,rsu_mask)
+
+        return intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask
+
+    def combine_masks(self,intersection_mask,rsu_network_idx,rsu_mask):
+        """Combines the masks for the padding and the already selected intersections.
+
+        Args:
+            intersection_mask (numpy.ndarray): Mask for padding in intersections
+            rsu_network_idx (numpy.ndarray): IDs of intersections that were pre-selected for the RSU network
+            rsu_mask (numpy.ndarray): Mask for padding in the RSU network IDs
+
+        Returns:
+            numpy.ndarray: Mask that removes both the padding and already selected RSUs.
+        """
+        mask = intersection_mask.copy()
+        for i in range(rsu_mask.shape[0]):
+            if bool(rsu_mask[i]) is True:
+                mask[rsu_network_idx[i]] = False
+        return mask
 
 class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def __init__(self,
