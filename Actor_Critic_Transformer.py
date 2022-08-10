@@ -2,7 +2,7 @@ from turtle import forward
 from typing import List, Tuple, Callable, Iterator
 
 import torch
-from torch import Tensor, embedding, nn
+from torch import Tensor, nn
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 
@@ -123,8 +123,6 @@ class Actor(nn.Module):
         self.decoder = Decoder(c_embed,nhead,n_layers)
         self.pointer = PointerNetwork(c_embed)
         self.W = W
-        
-        
 
     def forward(self,intersections,mask):
         # print("Input shape",intersections.shape)
@@ -146,12 +144,19 @@ class Actor(nn.Module):
 
             log_pointer_score = self.pointer(decoder_state,encoder_state)
             # print("Pointer output shape",log_pointer_score.shape)
-            _, masked_argmax = self.tensor_max(log_pointer_score, dim=-1)
+            _, masked_argmax = self.masked_max(log_pointer_score,mask, dim=-1)
             # print("masked argmax",masked_argmax)
 
             log_pointer_scores.append(log_pointer_score[:, -1, :])
             new_maxes = masked_argmax[:, -1]
             # print("New maxes",new_maxes)
+            mask[0,new_maxes] = False
+            mask[:,0] = True # This is the choice that no RSU should be placed. 
+            # print("before shape",mask.shape)
+            # print("before mask",mask)
+            # mask = mask.unsqueeze(1).expand(-1, log_pointer_score.shape[1], -1)
+            # print("after shape",mask.shape)
+            # print("after mask",mask)
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)
             # print('\n')
@@ -162,6 +167,35 @@ class Actor(nn.Module):
         masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
         
         return log_pointer_scores, masked_argmaxs
+
+    def masked_max(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+        dim: int,
+        keepdim: bool = False
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply max to x with masking.
+
+        Adapted from allennlp by allenai:
+            https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py
+
+        Args:
+            x - Tensor of arbitrary shape to apply max over.
+            mask - Binary mask of same shape as x where "False" indicates elements
+            to disregard from operation.
+            dim - Dimension over which to apply operation.
+            keepdim - If True, keeps dimension dim after operation.
+        Outputs:
+            A ``torch.Tensor`` of including the maximum values.
+        """
+        x_replaced = x.masked_fill(~mask, -3e37)
+        # print(x_replaced)
+        max_value, max_index = x_replaced.max(dim=dim, keepdim=keepdim)
+        # print(max_value)
+        # print(max_index)
+        return max_value, max_index
 
     def tensor_max(self,
         x: torch.Tensor,
@@ -211,4 +245,6 @@ class Actor_Critic(nn.Module):
         log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
         # print(log_pointer_scores[-1,:,:])
         print(pointer_argmaxs)
+        print(pointer_argmaxs[pointer_argmaxs>0])
+        return log_pointer_scores, pointer_argmaxs
 

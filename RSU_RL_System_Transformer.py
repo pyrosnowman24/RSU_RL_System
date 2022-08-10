@@ -84,6 +84,6 @@ class DRL_System(LightningModule):
 simulation_agent = Agent()
 model = DRL_System(simulation_agent)
 trainer = Trainer(max_epochs = 50)
-datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=3)
+datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
 
 trainer.fit(model,datamodule=datamodule)

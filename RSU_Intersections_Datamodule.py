@@ -42,21 +42,33 @@ class RSU_Intersection_Dataset(Dataset):
                  intersections: list,
                  intersections_idx: list,
                  rsu_network_idx: list):
+        """Responsible for padding the subset of intersections to the maximum number possible for the problem. Also adds an extra "intersections" at the beginning, which the model can select to not place an RSU.
+
+        Args:
+            intersections (list): A subset of intersections for the batch.
+            intersections_idx (list): indices of each intersection in the batch from the complete list of intersections.
+            rsu_network_idx (list): The index of the intersections that will have an RSU at the start of an iteration.
+
+        Returns:
+            intersections_padded (list): List of intersections with extra added to the start and padding at the end.
+            intersection_idx_padded (list): List of intersection indices with extra added to the front and padding to the end.
+            rsu_network_idx_padded (list): List of indices for RSUs with padding added to the end for the maximum RSU network size for pre-placed RSUs.
+            mask (list): Mask that can be applied to the intersections_padded to remove padding. This does not remove the extra value at the beginning.
+        """
 
 
-        intersections_padded = np.zeros((self.max_intersections,intersections.shape[1]),dtype=np.float32)
-        intersection_idx_padded = np.zeros((self.max_intersections),dtype=np.int64)
+        intersections_padded = np.zeros((self.max_intersections+1,intersections.shape[1]),dtype=np.float32)
+        intersection_idx_padded = np.zeros((self.max_intersections+1),dtype=np.int64)
         rsu_network_idx_padded = np.zeros((self.max_pre_rsu_network),dtype=np.int64)
 
-        intersection_mask = np.zeros((self.max_intersections),dtype=np.uint8)
+        intersection_mask = np.zeros((self.max_intersections+1),dtype=np.uint8)
         rsu_mask = np.zeros((self.max_pre_rsu_network),dtype=np.uint8)
 
-
-        intersections_padded[:intersections.shape[0],:intersections.shape[1]] = intersections
-        intersection_idx_padded[:len(intersections_idx)] = intersections_idx
+        intersections_padded[1:intersections.shape[0]+1,:intersections.shape[1]] = intersections
+        intersection_idx_padded[1:len(intersections_idx)+1] = intersections_idx
         rsu_network_idx_padded[:len(rsu_network_idx)] = rsu_network_idx
 
-        intersection_mask[:len(intersections_idx)] = 1
+        intersection_mask[:len(intersections_idx)+1] = 1
         rsu_mask[:len(rsu_network_idx)] = 1
 
         intersection_mask = np.where(intersection_mask == 1, True, False)
@@ -80,7 +92,7 @@ class RSU_Intersection_Dataset(Dataset):
         mask = intersection_mask.copy()
         for i in range(rsu_mask.shape[0]):
             if bool(rsu_mask[i]) is True:
-                mask[rsu_network_idx[i]] = False
+                mask[rsu_network_idx[i]+1] = False
         return mask
 
 class RSU_Intersection_Datamodule(pl.LightningDataModule):
