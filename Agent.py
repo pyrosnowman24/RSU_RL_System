@@ -47,28 +47,38 @@ class Agent:
 
     def simulation_step(self,rsu_network_idx,sim_idx,W=[.5,.5]):
         # Receive new action, add it to the state, then gather intersections in RSU network
+        try: subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
+        except: pass
         
         rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
         self.place_rsu_network(rsu_network)
-
         process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True)
-        # process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
-        process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
+        process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
+        # process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
 
-        features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
+        # features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
+        features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
+        
         reward = self.reward(features,W)
 
         return reward
 
     def reward(self,features,W):
         avg_features = np.nanmean(features,axis=1)
-        avg_features[0] = 1/avg_features[0]*-1000
-        avg_features[1] = avg_features[1]/10
+        avg_features[0] = -(300/avg_features[0])
+        avg_features[1] = 200/avg_features[1]
         reward = np.multiply(avg_features,W)
         reward = np.sum(reward)
         return reward
+
+    def kill_sumo_env(self):
+        print('\n',os.path.exists("sumo-launchd.pid"),'\n')
+        if os.path.exists("sumo-launchd.pid"):
+            print("killing")
+            subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
+        else: print("lasdjhfapsdncjkvnawuinbiufah")
 
 # Functions to update the simulation
 
@@ -248,20 +258,27 @@ class Agent:
         features = np.asarray(features)
         return features
 
-    def collect_rsu_results(self,desired_features = ["recvPower_dBm:count","recvPower_dBm:mean","TotalLostPackets"]):
-        features = []
-        for current_feature in desired_features:
-            results = subprocess.run(["scavetool","q","-f",f"{current_feature}","-l","-g",self.omnet_results_file], capture_output=True, text=True).stdout
-            results = re.findall(rf"{current_feature} (.*)",results)
-            results = [float(i) for i in results]
-            features.append(results)
+    def collect_rsu_results(self,rsu_network_idx,desired_features = ["recvPower_dBm:count","recvPower_dBm:mean","TotalLostPackets"]):
+        features = np.empty((len(desired_features),len(rsu_network_idx)))
+        for j,current_feature in enumerate(desired_features):
+            current_feature_results = []
+            for i in range(len(rsu_network_idx)):
+                current_rsu = "RSUExampleScenario.rsu[{}].nic.mac1609_4".format(i)
+                current_filter = "name({}) AND module({})".format(current_feature,current_rsu)
+                results = subprocess.run(["scavetool","q","-f",f"{current_filter}","-l","-g",self.omnet_results_file], capture_output=True, text=True).stdout
+                results = re.findall(rf"{current_feature} (.*)",results)
+                results = [float(i) for i in results]
+                current_feature_results.append(results)
+            features[j,:] = np.asarray(current_feature_results)[:,0]
         features = np.asarray(features)
         return features
     
     def collect_vehicle_results(self,desired_features = ["recvPower_dBm:count","recvPower_dBm:mean","TotalLostPackets"]):
         features = []
         for current_feature in desired_features:
-            results = subprocess.run(["scavetool","q","-f",f"{current_feature}","-l","-g",self.omnet_results_file], capture_output=True, text=True).stdout
+            car_filter = "RSUExampleScenario.node[..].nic.mac1609_4"
+            current_filter = "name({}) AND module({})".format(current_feature,car_filter)
+            results = subprocess.run(["scavetool","q","-f",f"{current_filter}","-l","-g",self.omnet_results_file], capture_output=True, text=True).stdout
             results = re.findall(rf"{current_feature} (.*)",results)
             results = [float(i) for i in results]
             features.append(results)

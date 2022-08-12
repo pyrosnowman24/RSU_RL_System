@@ -15,6 +15,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 import numpy as np
 import argparse
+import signal
+import sys
 
 from Agent import Agent
 from Actor_Critic_Transformer import Actor_Critic
@@ -71,7 +73,16 @@ class DRL_System(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
-        self.actor_critic(intersections,intersection_idx,rsu_network_idx,mask)
+        log_pointer_scores, pointer_argmaxs = self.actor_critic(intersections,intersection_idx,rsu_network_idx,mask)
+        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
+        print(rsu_idx)
+        print(intersection_idx[0,1:])
+        if len(rsu_idx) != 0:
+            reward = simulation_agent.simulation_step(rsu_idx,intersection_idx[0,1:])
+        else:
+            reward = torch.tensor(0.0)
+        reward = torch.tensor([reward])
+        # return reward
 
     def validation_step(self,batch):
         print(3)
@@ -80,10 +91,22 @@ class DRL_System(LightningModule):
         actor_critic_optim = Adam(self.actor_critic.parameters(),lr = self.lr)
         return actor_critic_optim
 
+# def exit_gracefully(signum,frame):
+#     signal.signal(signal.SIGINT, original_sigint)
+#     try:
+#         simulation_agent.kill_sumo_env()
+#         sys.exit(1)
 
-simulation_agent = Agent()
-model = DRL_System(simulation_agent)
-trainer = Trainer(max_epochs = 50)
-datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
+#     except KeyboardInterrupt:
+#         print("Ok ok, quitting")
+#         sys.exit(1)
 
-trainer.fit(model,datamodule=datamodule)
+if __name__ == '__main__':
+    # original_sigint = signal.getsignal(signal.SIGINT)
+    # signal.signal(signal.SIGINT, exit_gracefully)
+    simulation_agent = Agent()
+    model = DRL_System(simulation_agent)
+    trainer = Trainer(max_epochs = 50)
+    datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
+
+    trainer.fit(model,datamodule=datamodule)
