@@ -193,37 +193,12 @@ class Actor(nn.Module):
         # print(max_index)
         return max_value, max_index
 
-class Critic(nn.Module):
-    def __init__(self, static_size, hidden_size):
-        super(Critic, self).__init__()
-
-        self.static_encoder = Encoder(static_size, hidden_size)
-
-        # Define the encoder & decoder models
-        self.fc1 = nn.Conv1d(hidden_size, 20, kernel_size=1)
-        self.fc2 = nn.Conv1d(20, 20, kernel_size=1)
-        self.fc3 = nn.Conv1d(20, 1, kernel_size=1)
-
-        for p in self.parameters():
-            if len(p.shape) > 1:
-                nn.init.xavier_uniform_(p)
-    def forward(self, state, intersections):
-
-        encoder_input = intersections
-
-        hidden = self.static_encoder(encoder_input)
-
-        output = F.relu(self.fc1(hidden))
-        output = F.relu(self.fc2(output))
-        output = self.fc3(output).sum(dim=2)
-        return output
-
-class Actor_Critic(nn.Module):
+class Policy_Gradient(nn.Module):
     def __init__(self, num_features: int,
                        nhead: int,
                        W = [.5,.5],
                        n_layers = 1) -> None:
-        super(Actor_Critic,self).__init__()
+        super(Policy_Gradient,self).__init__()
         self.actor = Actor(num_features,nhead,W = W, n_layers = n_layers)
 
     def forward(self,intersections: torch.Tensor,

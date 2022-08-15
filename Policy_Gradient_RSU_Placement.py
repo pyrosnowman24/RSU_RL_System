@@ -19,7 +19,7 @@ import signal
 import sys
 
 from Agent import Agent
-from Actor_Critic_Transformer import Actor_Critic
+from Policy_Gradient_Transformer import Policy_Gradient
 from RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 
 class ExperienceSourceDataset(IterableDataset):
@@ -35,7 +35,7 @@ class ExperienceSourceDataset(IterableDataset):
         iterator = self.generate_batch()
         return iterator
 
-class DRL_System(LightningModule):
+class PG_System(LightningModule):
     def __init__(self,
                  agent,
                  num_features: int = 3,
@@ -47,7 +47,7 @@ class DRL_System(LightningModule):
                  n_layers: int = 1,
                  lr = 1e-4):
 
-        super(DRL_System,self).__init__()
+        super(PG_System,self).__init__()
         
         self.num_features = num_features
         self.nhead = nhead
@@ -61,19 +61,19 @@ class DRL_System(LightningModule):
 
         self.agent = agent
 
-        self.actor_critic = Actor_Critic(self.num_features,
+        self.policy_gradient = Policy_Gradient(self.num_features,
                                          self.nhead,
                                          n_layers = self.n_layers)
 
     def forward(self,x):
-        return self.actor_critic(x)
+        return self.policy_gradient(x)
 
     def training_step(self,batch):
         intersections = batch[0]
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
-        log_pointer_scores, pointer_argmaxs = self.actor_critic(intersections,intersection_idx,rsu_network_idx,mask)
+        log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
         print(rsu_idx)
         print(intersection_idx[0,1:])
@@ -83,14 +83,13 @@ class DRL_System(LightningModule):
             reward = torch.tensor(0.0)
         reward = torch.tensor([reward],requires_grad=True)
         print("\n reward",reward,'\n')
-        return reward
 
     def validation_step(self,batch):
         print(3)
 
     def configure_optimizers(self):
-        actor_critic_optim = Adam(self.actor_critic.parameters(),lr = self.lr)
-        return actor_critic_optim
+        policy_gradient_optim = Adam(self.policy_gradient.parameters(),lr = self.lr)
+        return policy_gradient_optim
 
 # def exit_gracefully(signum,frame):
 #     signal.signal(signal.SIGINT, original_sigint)
@@ -106,7 +105,7 @@ if __name__ == '__main__':
     # original_sigint = signal.getsignal(signal.SIGINT)
     # signal.signal(signal.SIGINT, exit_gracefully)
     simulation_agent = Agent()
-    model = DRL_System(simulation_agent)
+    model = PG_System(simulation_agent)
     trainer = Trainer(max_epochs = 50)
     datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
 
