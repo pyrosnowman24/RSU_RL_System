@@ -78,11 +78,13 @@ class PG_System(LightningModule):
         print(rsu_idx)
         print(intersection_idx[0,1:])
         if len(rsu_idx) != 0:
-            reward = simulation_agent.simulation_step(rsu_idx,intersection_idx[0,1:])
+            reward = simulation_agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
         else:
             reward = torch.tensor(0.0)
-        reward = torch.tensor([reward],requires_grad=True)
-        print("\n reward",reward,'\n')
+        reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
+        loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
+        print("loss",loss)
+        return loss
 
     def validation_step(self,batch):
         print(3)
@@ -90,6 +92,17 @@ class PG_System(LightningModule):
     def configure_optimizers(self):
         policy_gradient_optim = Adam(self.policy_gradient.parameters(),lr = self.lr)
         return policy_gradient_optim
+
+    def loss(self,log_prob,rsu_idx,rewards):
+        if torch.sum(rsu_idx) == 0.0:
+            return torch.tensor(-10.0,requires_grad=True)
+
+        padded_rewards = torch.zeros(rsu_idx.shape[1])
+        padded_rewards[rsu_idx[0,:] != 0] = rewards
+        log_prob_actions = padded_rewards * log_prob[0,range(log_prob.shape[1]),rsu_idx]
+        log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
+        loss = -log_prob_actions.mean()
+        return loss
 
 # def exit_gracefully(signum,frame):
 #     signal.signal(signal.SIGINT, original_sigint)

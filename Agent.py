@@ -45,7 +45,7 @@ class Agent:
 
 # Functions to interact with the simulation.
 
-    def simulation_step(self,rsu_network_idx,sim_idx,W=[.5,.5]):
+    def simulation_step(self,rsu_network_idx,sim_idx,W=[.5,.5],model = 'Actor Critic'):
         # Receive new action, add it to the state, then gather intersections in RSU network
         try: subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
         except: pass
@@ -60,18 +60,28 @@ class Agent:
 
         # features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
         features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
-        
-        reward = self.reward(features,W)
+        if model == "Policy Gradient":
+            reward = self.reward_pg(features,W)
+        else:
+            reward = self.reward(features,W)
 
         return reward
 
     def reward(self,features,W):
         avg_features = np.nanmean(features,axis=1)
         avg_features[0] = -(300/avg_features[0])
-        avg_features[1] = 200/avg_features[1]
+        avg_features[1] = 200/avg_features[1,:]
         reward = np.multiply(avg_features,W)
         reward = np.sum(reward)
         return reward
+
+    def reward_pg(self,features,W):
+        features = np.nan_to_num(features,nan = -10000)
+        # print(features)
+        features[0] = np.power(100/(features[0,:]+30),2)
+        features[1] = .025*features[1]
+        features = np.sum(features,axis=0)
+        return features
 
     def kill_sumo_env(self):
         print('\n',os.path.exists("sumo-launchd.pid"),'\n')
