@@ -81,14 +81,16 @@ class PG_System(LightningModule):
         log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
         self.rsu_network_history.append(pointer_argmaxs)
+        print(rsu_network_idx)
         print(rsu_idx)
-        print(intersection_idx[0,1:])
+        print(intersection_idx[0,:])
         if len(rsu_idx) != 0:
             reward = simulation_agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
+            reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
+            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
         else:
-            reward = torch.tensor(0.0)
-        reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-        loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
+            loss = torch.tensor(-10.0,requires_grad=True)
+        
         print("loss",loss)
         self.loss_history.append(loss.detach().numpy())
         return loss
@@ -101,8 +103,6 @@ class PG_System(LightningModule):
         return policy_gradient_optim
 
     def loss(self,log_prob,rsu_idx,rewards):
-        if torch.sum(rsu_idx) == 0.0:
-            return torch.tensor(-10.0,requires_grad=True)
         padded_rewards = torch.zeros(rsu_idx.shape[1])
         padded_rewards[rsu_idx[0,:] != 0] = rewards
         log_prob_actions = padded_rewards * log_prob[0,range(log_prob.shape[1]),rsu_idx]
@@ -110,39 +110,44 @@ class PG_System(LightningModule):
         loss = -log_prob_actions.mean()
         return loss
 
-def save_information(model,loss_history,rsu_network_history):
-    model_directory = os.path.join(directory_path,model_name,'/')
-    model_path = os.path.join(model_directory,model_name)
+def save_information(model,loss_history,rsu_network_history,model_directory,model_path):
     loss_history_file = os.path.join(model_directory,"loss_history.csv")
     rsu_network_history_file = os.path.join(model_directory,"rsu_network_history.csv")
 
+    loss_history_np = np.empty((len(loss_history)))
+    rsu_network_history_np = np.empty((len(rsu_network_history),rsu_network_history[0].shape[1]))
+
+    for i, item in enumerate(loss_history):
+        loss_history_np[i] = item
+
+    for j, item in enumerate(rsu_network_history):
+        rsu_network_history_np[j,:] = item.detach().numpy()
+
     torch.save(model.state_dict(),model_path)
-    os.makedirs(model_directory)
-    np.savetxt(loss_history_file, loss_history, delimiter=",")
-    np.savetxt(rsu_network_history_file, rsu_network_history, delimiter=",")
+    np.savetxt(loss_history_file, loss_history_np, delimiter=",")
+    np.savetxt(rsu_network_history_file, rsu_network_history_np, delimiter=",")
 
 
 if __name__ == '__main__':
     max_epochs = 2
     train_new_model = True
     save_model = True
-    save_data = True
     display_figures = True
-    directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "test"
-    model_directory = os.path.join(directory_path,model_name,'/')
-    model_path = os.path.join(model_directory,model_name)
-
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
+    directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
+    model_name = "10_Epoch_Run"
+    model_directory = os.path.join(directory_path,model_name+'/')
+    model_path = os.path.join(model_directory,model_name)
     if train_new_model:
         simulation_agent = Agent()
         model = PG_System(simulation_agent)
-        trainer = Trainer(max_epochs = 1)
+        trainer = Trainer(max_epochs = 10)
         datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
         trainer.fit(model,datamodule=datamodule)
         if save_model:
-            torch.save(model.state_dict())
+            os.makedirs(model_directory)
+            save_information(model,model.loss_history,model.rsu_network_history,model_directory,model_path)
 
 
     else:
