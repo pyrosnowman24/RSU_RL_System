@@ -90,6 +90,11 @@ class Agent:
             subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
         else: print("lasdjhfapsdncjkvnawuinbiufah")
 
+    def display_environment(self,rsu_network_idx,sim_idx):
+        rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
+        self.place_rsu_network(rsu_network)
+        process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
+
 # Functions to update the simulation
 
     def place_rsu_network(self,intersections):
