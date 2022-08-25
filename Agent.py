@@ -73,14 +73,16 @@ class Agent:
         avg_features[1] = 200/avg_features[1,:]
         reward = np.multiply(avg_features,W)
         reward = np.sum(reward)
+        reward = reward - len(reward)
         return reward
 
     def reward_pg(self,features,W):
         features = np.nan_to_num(features,nan = -10000)
-        # print(features)
         features[0] = np.power(100/(features[0,:]+30),2)
         features[1] = .025*features[1]
         features = np.sum(features,axis=0)
+        for i in range(len(features)):
+            features[i] *= 1/(.1*i+1)
         return features
 
     def kill_sumo_env(self):
@@ -284,7 +286,11 @@ class Agent:
                 results = re.findall(rf"{current_feature} (.*)",results)
                 results = [float(i) for i in results]
                 current_feature_results.append(results)
-            features[j,:] = np.asarray(current_feature_results)[:,0]
+            if len(current_feature_results) != 0:
+                features[j,:] = np.asarray(current_feature_results)[:,0]
+            else: features[j,:] = 0
+            current_feature_results = []
+
         features = np.asarray(features)
         return features
     
