@@ -98,8 +98,8 @@ class RSU_Intersection_Dataset(Dataset):
 class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def __init__(self,
                  agent,
-                 batch_size: int = 16,
-                 train_test_split: float = .7,
+                 batch_size: int = 1,
+                 train_test_split: float = 1,
                  n_scenarios: int = 100,
                  min_intersections: int = 10,
                  max_intersections: int = 30,

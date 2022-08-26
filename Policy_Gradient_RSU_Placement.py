@@ -71,11 +71,12 @@ class PG_System(LightningModule):
 
         # self.df_history = pd.DataFrame(columns=["intersections","intersection_idx","pre_rsu_network","rsu_network","reward","loss"],dtype=object)
         self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","loss"],dtype=object)
+        self.df_new_data = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","loss"],dtype=object)
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
 
-
+        self.count = 0
 
     def forward(self,x):
         return self.policy_gradient(x)
@@ -101,7 +102,8 @@ class PG_System(LightningModule):
         print("loss",loss)
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
         data = [intersection_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        self.df_history.loc[self.df_history.shape[0]]=data
+        self.df_history.loc[self.df_history.shape[0]] = data
+        self.df_new_data.loc[0] = data
         if self.save_data_bool:
             self.save_data()
         return loss
@@ -146,30 +148,30 @@ class PG_System(LightningModule):
         padded_rewards[rsu_idx[0,:] != 0] = rewards
         log_prob_actions = padded_rewards * -log_prob[0,range(log_prob.shape[1]),rsu_idx]
         log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
-        loss = log_prob_actions.mean()
+        loss = -log_prob_actions.mean()
         return loss
 
     def save_data(self):
         print("Saving Data")
         if not os.path.isfile(self.model_history_file):
-            self.df_history.to_csv(self.model_history_file, index=False)
+            self.df_new_data.to_csv(self.model_history_file, index=False)
         else: # else it exists so append without writing the header
-            self.df_history.to_csv(self.model_history_file, index=False, mode='a', header=False)
+            self.df_new_data.to_csv(self.model_history_file, index=False, mode='a', header=False)
 
-def save_model(model,df_history,model_directory,model_path):
+def save_model(model,model_directory,model_path):
     model_history_file = os.path.join(model_directory,"model_history.csv")
     torch.save(model.state_dict(),model_path)
 
 
 if __name__ == '__main__':
-    max_epochs = 1
+    max_epochs = 25
     train_new_model = True
     save_model_bool = True
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "test"
+    model_name = "25_Epochs_30_Intersections"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     if save_model_bool:
@@ -181,7 +183,7 @@ if __name__ == '__main__':
         datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
         trainer.fit(model,datamodule=datamodule)
         if save_model_bool:
-            save_model(model,model.df_history,model_directory,model_path)
+            save_model(model,model_directory,model_path)
 
     else:
         model = PG_System(simulation_agent)

@@ -47,6 +47,7 @@ class Agent:
 
     def simulation_step(self,rsu_network_idx,sim_idx,W=[.5,.5],model = 'Actor Critic'):
         # Receive new action, add it to the state, then gather intersections in RSU network
+
         try: subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
         except: pass
         
