@@ -18,21 +18,32 @@ class RSU_Intersection_Dataset(Dataset):
         self.max_pre_rsu_network = max_pre_rsu_network
         self.agent = agent
 
-        self.sim_idx_array = []
-        self.rsu_idx_array = []
-        self.n_intersections = np.random.randint(low=min_intersections, high=max_intersections + 1, size=n_scenarios)
-        self.n_pre_rsu_network = np.random.randint(low=min_pre_rsu_network, high=max_pre_rsu_network + 1, size=n_scenarios)
-        for i,c in enumerate(self.n_intersections):
-            self.sim_idx_array.append(np.random.choice(self.agent.network_intersections.shape[0],size = c,replace=False))
-            self.rsu_idx_array.append(np.random.choice(self.sim_idx_array[-1].shape[0],size = self.n_pre_rsu_network[i],replace=False))
+        # self.sim_idx_array = []
+        # self.rsu_idx_array = []
+        # self.n_intersections = np.random.randint(low=min_intersections, high=max_intersections + 1, size=n_scenarios)
+        # self.n_pre_rsu_network = np.random.randint(low=min_pre_rsu_network, high=max_pre_rsu_network + 1, size=n_scenarios)
+        # for i,c in enumerate(self.n_intersections):
+        #     self.sim_idx_array.append(np.random.choice(self.agent.network_intersections.shape[0],size = c,replace=False))
+        #     self.rsu_idx_array.append(np.random.choice(self.sim_idx_array[-1].shape[0],size = self.n_pre_rsu_network[i],replace=False))
 
     def __len__(self):
         return self.n_scenarios
 
+    # def __getitem__(self,idx:int):
+    #     intersections = self.agent.get_simulated_intersections(self.sim_idx_array[idx])
+    #     intersection_idx = self.sim_idx_array[idx]
+    #     rsu_network_idx = self.rsu_idx_array[idx]
+
+    #     intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
+
+    #     return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask
+    
     def __getitem__(self,idx:int):
-        intersections = self.agent.get_simulated_intersections(self.sim_idx_array[idx])
-        intersection_idx = self.sim_idx_array[idx]
-        rsu_network_idx = self.rsu_idx_array[idx]
+        # This version creates a new scenario each time its called
+        intersection_idx = np.random.choice(self.agent.network_intersections.shape[0],size = np.random.randint(low=self.min_intersections, high=self.max_intersections + 1) , replace=False)
+        rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
+
+        intersections = self.agent.get_simulated_intersections(intersection_idx)
 
         intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
 
@@ -131,6 +142,6 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size = self.batch_size,num_workers=4)
 
-    def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size = self.batch_size,num_workers=4)
+    # def test_dataloader(self):
+    #     return DataLoader(self.test_dataset, batch_size = self.batch_size,num_workers=4)
 

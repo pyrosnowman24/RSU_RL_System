@@ -21,8 +21,9 @@ import os
 import pandas as pd
 
 from Agent import Agent
-from Policy_Gradient_Transformer import Policy_Gradient
+from Models.Policy_Gradient.Policy_Gradient_Transformer import Policy_Gradient
 from RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
+
 
 class ExperienceSourceDataset(IterableDataset):
     """Basic experience source dataset.
@@ -76,7 +77,7 @@ class PG_System(LightningModule):
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
 
-        self.count = 0
+        self.running_average = 0
 
     def forward(self,x):
         return self.policy_gradient(x)
@@ -94,14 +95,24 @@ class PG_System(LightningModule):
         if len(rsu_idx) != 0:
             reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
             reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
+            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            scaled_reward = reward - self.running_average
+            loss = self.loss(log_pointer_scores,pointer_argmaxs,scaled_reward)
         else:
             reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            loss = torch.tensor(0.0,requires_grad=True)
-        
+            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            scaled_reward = reward - self.running_average
+            loss = self.loss(log_pointer_scores,pointer_argmaxs,scaled_reward)
+        print("reward",reward)
+        print("running average",self.running_average)
+        print("scaled reward",scaled_reward)
         print("loss",loss)
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        data = [intersection_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
+        print("intersection idx",intersection_idx)
+        print("rsu idx",rsu_idx)
+        print("scaled reward",scaled_reward.detach().numpy())
+        print("loss",loss.detach().numpy())
+        data = [intersection_idx,rsu_idx,scaled_reward.detach().numpy(),loss.detach().numpy()]
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -124,7 +135,7 @@ class PG_System(LightningModule):
             loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
         else:
             reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            loss = torch.tensor(-10.0,requires_grad=True)
+            loss = torch.tensor(0.0,requires_grad=True)
         print(loss)
 
     def configure_optimizers(self):
@@ -148,7 +159,7 @@ class PG_System(LightningModule):
         padded_rewards[rsu_idx[0,:] != 0] = rewards
         log_prob_actions = padded_rewards * -log_prob[0,range(log_prob.shape[1]),rsu_idx]
         log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
-        loss = -log_prob_actions.mean()
+        loss = log_prob_actions.mean()
         return loss
 
     def save_data(self):
@@ -171,7 +182,7 @@ if __name__ == '__main__':
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "25_Epochs_30_Intersections"
+    model_name = "25_Epochs_30_Intersections_Scaled"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     if save_model_bool:
@@ -180,7 +191,7 @@ if __name__ == '__main__':
         simulation_agent = Agent()
         model = PG_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
         trainer = Trainer(max_epochs = max_epochs)
-        datamodule = RSU_Intersection_Datamodule(simulation_agent,batch_size=1)
+        datamodule = RSU_Intersection_Datamodule(simulation_agent)
         trainer.fit(model,datamodule=datamodule)
         if save_model_bool:
             save_model(model,model_directory,model_path)
