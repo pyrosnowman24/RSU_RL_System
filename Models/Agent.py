@@ -78,12 +78,20 @@ class Agent:
         return reward
 
     def reward_pg(self,features,W):
-        features = np.nan_to_num(features,nan = -10000)
-        features[0] = np.power(100/(features[0,:]+30),2)
-        features[1] = .025*features[1]
+        print("features",features)
+        features[0] = np.nan_to_num(features[0],nan = -104)
+        features[1] = np.nan_to_num(features[1],nan = 0)
+        # features[0] = np.power(100/(features[0,:]+30),2)
+        # features[1] = .025*features[1]
+        features[0] = np.power(50/(features[0,:]+105),2)
+        features[1] = 500/(features[1,:]+1)
+
+        print("processed features",features)
+
         features = np.sum(features,axis=0)
         for i in range(len(features)):
-            features[i] *= 1/(.1*i+1)
+            features[i] += .15 * np.square(i)
+        print(features)
         return features
 
     def kill_sumo_env(self):

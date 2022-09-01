@@ -20,9 +20,14 @@ import sys
 import os
 import pandas as pd
 
-from Agent import Agent
+currentdir = os.path.dirname(os.path.realpath(__file__))
+parentdir = os.path.dirname(currentdir)
+parentdir2 = os.path.dirname(parentdir)
+sys.path.append(parentdir2)
+
+from Models.Agent import Agent
 from Models.Q_Learning.Q_Learning_Transformer import Q_Learning
-from RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
+from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 
 
 class ExperienceSourceDataset(IterableDataset):
@@ -87,22 +92,24 @@ class QL_System(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
-        q_values, pointer_argmaxs = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask)
+        q_values, pointer_argmaxs, new_mask = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
         # print(rsu_network_idx)
         # print(rsu_idx)
         # print(intersection_idx[0,:])
+
+        # Maybe use the raw reward instead of scaled?
         if len(rsu_idx) != 0:
             reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
             reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
             self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
             scaled_reward = reward - self.running_average
-            loss = self.loss(intersections,q_values,scaled_reward)
+            loss = self.loss(intersections, q_values, scaled_reward, new_mask)
         else:
             reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
             self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
             scaled_reward = reward - self.running_average
-            loss = self.loss(intersections,q_values,scaled_reward)
+            loss = self.loss(intersections, q_values, scaled_reward, new_mask)
 
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
         data = [intersection_idx,rsu_idx,scaled_reward.detach().numpy(),loss.detach().numpy()]
@@ -116,7 +123,7 @@ class QL_System(LightningModule):
         policy_gradient_optim = Adam(self.q_learning.parameters(),lr = self.lr)
         return policy_gradient_optim
 
-    def loss(self,intersections,q_values,rewards, gamma: float = 0.99):
+    def loss(self,intersections,q_values,rewards, mask, gamma: float = 0.99):
         """Calculates the loss for the Q-Learning RL algorithm.
 
         Args:
@@ -125,9 +132,10 @@ class QL_System(LightningModule):
         Returns:
             loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
         """
+        masked_intersections  = intersections.masked_fill(~mask, 0.0)
 
         with torch.no_grad():
-            next_state_values = self.q_learning.target_network(intersections)
+            next_state_values = self.q_learning.target_network(masked_intersections)
             next_state_values = next_state_values.detach()
 
         expected_state_action_values = next_state_values * gamma + rewards

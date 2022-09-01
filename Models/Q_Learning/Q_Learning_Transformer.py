@@ -162,7 +162,7 @@ class Actor(nn.Module):
         q_values = torch.stack(q_values, dim=1)
         masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
         
-        return q_values, masked_argmaxs
+        return q_values, masked_argmaxs, mask
 
     def masked_max(
         self,
@@ -207,7 +207,7 @@ class Q_Learning(nn.Module):
                      rsu_network_idx: torch.Tensor,
                      mask: torch.Tensor):
 
-        q_values, pointer_argmaxs = self.network(intersections,mask)
-        return q_values, pointer_argmaxs
+        q_values, pointer_argmaxs, mask = self.network(intersections,mask)
+        return q_values, pointer_argmaxs, mask
 
 

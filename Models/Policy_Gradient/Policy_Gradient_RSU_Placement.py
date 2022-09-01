@@ -1,3 +1,4 @@
+from cmath import isnan, nan
 from json import encoder
 from tkinter import Variable
 from tkinter.filedialog import askdirectory
@@ -20,9 +21,14 @@ import sys
 import os
 import pandas as pd
 
-from Agent import Agent
+currentdir = os.path.dirname(os.path.realpath(__file__))
+parentdir = os.path.dirname(currentdir)
+parentdir2 = os.path.dirname(parentdir)
+sys.path.append(parentdir2)
+
+from Models.Agent import Agent
 from Models.Policy_Gradient.Policy_Gradient_Transformer import Policy_Gradient
-from RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
+from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 
 
 class ExperienceSourceDataset(IterableDataset):
@@ -87,56 +93,38 @@ class PG_System(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
+        print("intersection idx",intersection_idx)
+        print("og rsu idx",rsu_network_idx)
         log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
-        # print(rsu_network_idx)
-        # print(rsu_idx)
-        # print(intersection_idx[0,:])
+        print("rsu_idx ",rsu_idx)
         if len(rsu_idx) != 0:
+            print("With RSU network")
             reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
             reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            scaled_reward = reward - self.running_average
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,scaled_reward)
+            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            # scaled_reward = reward - self.running_average
+            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
         else:
+            print("Without RSU network")
             reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            scaled_reward = reward - self.running_average
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,scaled_reward)
+            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            # scaled_reward = reward - self.running_average
+            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
         print("reward",reward)
         print("running average",self.running_average)
-        print("scaled reward",scaled_reward)
-        print("loss",loss)
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        print("intersection idx",intersection_idx)
         print("rsu idx",rsu_idx)
-        print("scaled reward",scaled_reward.detach().numpy())
         print("loss",loss.detach().numpy())
-        data = [intersection_idx,rsu_idx,scaled_reward.detach().numpy(),loss.detach().numpy()]
+        data = [intersection_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
+        print("data",data)
+        if self.df_new_data.shape[0] != 0: print(self.df_new_data.loc[0])
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
+        print(self.df_new_data.loc[0])
         if self.save_data_bool:
             self.save_data()
         return loss
-    
-    def validation_step(self,batch):
-        intersections = batch[0]
-        intersection_idx = batch[1]
-        rsu_network_idx = batch[2]
-        mask = batch[3]
-        log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections,intersection_idx,rsu_network_idx,mask)
-        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
-        # print(rsu_network_idx)
-        # print(rsu_idx)
-        # print(intersection_idx[0,:])
-        if len(rsu_idx) != 0:
-            reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
-            reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
-        else:
-            reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            loss = torch.tensor(0.0,requires_grad=True)
-        print(loss)
 
     def configure_optimizers(self):
         policy_gradient_optim = Adam(self.policy_gradient.parameters(),lr = self.lr)
@@ -157,9 +145,17 @@ class PG_System(LightningModule):
         """
         padded_rewards = torch.zeros(rsu_idx.shape[1])
         padded_rewards[rsu_idx[0,:] != 0] = rewards
+        # print(-log_prob[0,range(log_prob.shape[1]),rsu_idx])
+        # print(padded_rewards)
         log_prob_actions = padded_rewards * -log_prob[0,range(log_prob.shape[1]),rsu_idx]
+        log_prob_actions = torch.nan_to_num(log_prob_actions,0.0)
         log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
-        loss = log_prob_actions.mean()
+        # print(log_prob_actions)
+        loss = log_prob_actions.nanmean()
+        # print(loss)
+
+        if np.isnan(loss.detach().numpy()):
+            loss = torch.tensor(10000.0,requires_grad=True)
         return loss
 
     def save_data(self):
