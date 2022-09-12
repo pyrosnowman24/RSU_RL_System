@@ -83,13 +83,8 @@ class PointerNetwork(nn.Module):
         # print("pointer output",prod.shape)
         # print("pointer output",prod)
 
-        # (B, Nd, Ne) <- (B, Nd, Ne)
-        log_score = self.log_softmax(x = prod, dim=-1)
 
-        # print("Log score shape", log_score.shape)
-        # print("Log score",log_score,'\n')
-
-        return log_score
+        return prod
 
     def log_softmax(self,
         x: torch.Tensor,

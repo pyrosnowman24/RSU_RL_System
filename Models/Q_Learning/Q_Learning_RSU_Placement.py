@@ -1,3 +1,4 @@
+from ctypes import pointer
 from json import encoder
 from tkinter import Variable
 from tkinter.filedialog import askdirectory
@@ -92,38 +93,80 @@ class QL_System(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
+
         q_values, pointer_argmaxs, new_mask = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
+    
+        with torch.no_grad():
+                next_state_values, maxed_args, new_mask = self.q_learning.target_network(intersections,mask)
+                if len(maxed_args[maxed_args>0]) > 0:
+                    next_state_values = next_state_values[0,range(next_state_values.shape[1]),maxed_args]
+                    # next_state_values = q_value_next[maxed_args>0]
+                else: next_state_values = torch.zeros(size = pointer_argmaxs.shape, requires_grad=True)
+
         # print(rsu_network_idx)
         # print(rsu_idx)
         # print(intersection_idx[0,:])
 
         # Maybe use the raw reward instead of scaled?
         if len(rsu_idx) != 0:
-            reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
-            reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            scaled_reward = reward - self.running_average
-            loss = self.loss(intersections, q_values, scaled_reward, new_mask)
+            state_action_values = q_values[0,range(q_values.shape[1]),pointer_argmaxs]
+            # state_action_values = q_value_run[pointer_argmaxs>0]
+
+            reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Q Learning")
+            reward = torch.tensor([np.array(reward)],requires_grad=True,dtype=torch.float)
+            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            # scaled_reward = reward - self.running_average
+
+            scaled_padded_reward = self.pad_reward(reward, pointer_argmaxs)
+
+            # print("State action values ",state_action_values, state_action_values.shape)
+            # print("next state values",next_state_values, next_state_values.shape)
+            # print("scaled reward",scaled_padded_reward, scaled_padded_reward.shape)
+            
+            loss = self.loss(state_action_values, next_state_values, scaled_padded_reward)
+
+            print("loss",loss)
         else:
+            state_action_values = torch.zeros(size = pointer_argmaxs.shape, requires_grad=True)
             reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            scaled_reward = reward - self.running_average
-            loss = self.loss(intersections, q_values, scaled_reward, new_mask)
+            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
+            # scaled_reward = reward - self.running_average
+
+            scaled_padded_reward = self.pad_reward(reward, pointer_argmaxs)
+
+            # print("State action values ",state_action_values, state_action_values.shape)
+            # print("next state values",next_state_values, next_state_values.shape)
+            # print("scaled reward",scaled_padded_reward, scaled_padded_reward.shape)
+
+            loss = self.loss(state_action_values, next_state_values, scaled_padded_reward)
+
+            print("loss",loss)
 
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        data = [intersection_idx,rsu_idx,scaled_reward.detach().numpy(),loss.detach().numpy()]
+        intersection_test = intersection_idx.detach().numpy()
+        rsu_idx_test = rsu_idx.detach().numpy()
+        reward_test = reward.detach().numpy()
+        loss_test = loss.detach().numpy()
+        data = np.array((intersection_test,rsu_idx_test,reward_test,loss_test),dtype=object)
+        # print(data)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
             self.save_data()
-        return loss
+        return loss.float()
 
     def configure_optimizers(self):
-        policy_gradient_optim = Adam(self.q_learning.parameters(),lr = self.lr)
+        policy_gradient_optim = Adam(self.q_learning.network.parameters(),lr = self.lr)
         return policy_gradient_optim
 
-    def loss(self,intersections,q_values,rewards, mask, gamma: float = 0.99):
+    def pad_reward(self,reward,pointer_argmax):
+        reward_padded = np.zeros(shape = pointer_argmax.shape)
+        for i, index in enumerate(pointer_argmax[pointer_argmax>0]):
+            reward_padded[0,index] = reward[0,i]
+        return torch.tensor(reward_padded,dtype=torch.float)
+
+    def loss(self,state_action_values, next_state_values, rewards, gamma: float = 0.99):
         """Calculates the loss for the Q-Learning RL algorithm.
 
         Args:
@@ -132,14 +175,15 @@ class QL_System(LightningModule):
         Returns:
             loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
         """
-        masked_intersections  = intersections.masked_fill(~mask, 0.0)
-
-        with torch.no_grad():
-            next_state_values = self.q_learning.target_network(masked_intersections)
-            next_state_values = next_state_values.detach()
+        print('\n')
+        print("rewards", rewards)
+        print("next state values", next_state_values)
+        print("next state values * gamma", next_state_values * gamma)
+        print("state action values",state_action_values)
+        print('\n')
 
         expected_state_action_values = next_state_values * gamma + rewards
-        return nn.MSELoss()(q_values,expected_state_action_values)
+        return nn.MSELoss()(state_action_values,expected_state_action_values)
 
     def save_data(self):
         print("Saving Data")
@@ -161,7 +205,7 @@ if __name__ == '__main__':
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "25_Epochs_30_Intersections_Scaled"
+    model_name = "q_learning_third_try"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     if save_model_bool:

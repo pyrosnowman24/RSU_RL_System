@@ -116,7 +116,7 @@ class PG_System(LightningModule):
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
         print("rsu idx",rsu_idx)
         print("loss",loss.detach().numpy())
-        data = [intersection_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
+        data = [intersection_idx.numpy(),rsu_idx.numpy(),reward.detach().numpy(),loss.detach().numpy()]
         print("data",data)
         if self.df_new_data.shape[0] != 0: print(self.df_new_data.loc[0])
         self.df_history.loc[self.df_history.shape[0]] = data
@@ -171,14 +171,14 @@ def save_model(model,model_directory,model_path):
 
 
 if __name__ == '__main__':
-    max_epochs = 25
+    max_epochs = 1
     train_new_model = True
     save_model_bool = True
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "25_Epochs_30_Intersections_Scaled"
+    model_name = "test"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     if save_model_bool:

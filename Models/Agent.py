@@ -63,12 +63,23 @@ class Agent:
         features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
         if model == "Policy Gradient":
             reward = self.reward_pg(features,W)
+        if model == "Q Learning":
+            reward = self.reward_ql(features,W)
         else:
             reward = self.reward(features,W)
 
         return reward
 
     def reward(self,features,W):
+        """Reward for Actor Critic based model. The higher the reward the better the solution.
+
+        Args:
+            features (numpy.array): The valeus of each feature for all RSUs in network.
+            W (list): Used to bias rewards between features
+
+        Returns:
+            int: Reward for all RSUs in RSU network
+        """
         avg_features = np.nanmean(features,axis=1)
         avg_features[0] = -(300/avg_features[0])
         avg_features[1] = 200/avg_features[1,:]
@@ -78,7 +89,16 @@ class Agent:
         return reward
 
     def reward_pg(self,features,W):
-        print("features",features)
+        """Reward for Policy Gradient based model. The lower the reward the better the solution.
+
+        Args:
+            features (numpy.array): The valeus of each feature for all RSUs in network.
+            W (list): Used to bias rewards between features
+
+        Returns:
+            int: Reward for all RSUs in RSU network
+        """
+        # print("features",features)
         features[0] = np.nan_to_num(features[0],nan = -104)
         features[1] = np.nan_to_num(features[1],nan = 0)
         # features[0] = np.power(100/(features[0,:]+30),2)
@@ -86,12 +106,36 @@ class Agent:
         features[0] = np.power(50/(features[0,:]+105),2)
         features[1] = 500/(features[1,:]+1)
 
-        print("processed features",features)
+        # print("processed features",features)
 
         features = np.sum(features,axis=0)
         for i in range(len(features)):
             features[i] += .15 * np.square(i)
-        print(features)
+        # print(features)
+        return features
+
+    def reward_ql(self,features,W):
+        """Reward for Q-Learning based model. The higher the reward the better the solution.
+
+        Args:
+            features (numpy.array): The valeus of each feature for all RSUs in network.
+            W (list): Used to bias rewards between features
+
+        Returns:
+            int: Reward for all RSUs in RSU network
+        """
+        # print("features",features)
+        features[0] = np.nan_to_num(features[0],nan = -104)
+        features[1] = np.nan_to_num(features[1],nan = 0)
+        features[0] = .005 * np.power(features[0,:]+104,2)
+        features[1] = .00005 * np.power(features[1,:],2)
+
+        # print("processed features",features)
+
+        features = np.sum(features,axis=0)
+        for i in range(len(features)):
+            features[i] += .15 * np.square(i)
+        # print(features)
         return features
 
     def kill_sumo_env(self):
@@ -296,7 +340,10 @@ class Agent:
                 results = [float(i) for i in results]
                 current_feature_results.append(results)
             if len(current_feature_results) != 0:
-                features[j,:] = np.asarray(current_feature_results)[:,0]
+                features_to_save = np.asarray(current_feature_results)
+                if features_to_save.ndim == 2:
+                    features[j,:] = features_to_save[:,0]
+                else: features[j,:] = features_to_save
             else: features[j,:] = 0
             current_feature_results = []
 
