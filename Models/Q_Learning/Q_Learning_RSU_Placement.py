@@ -89,10 +89,11 @@ class QL_System(LightningModule):
         return self.q_learning(x)
 
     def training_step(self,batch):
-        intersections = batch[0]
-        intersection_idx = batch[1]
+        intersections = batch[0][:,1:,:]
+        intersection_idx = batch[1][:,1:]
         rsu_network_idx = batch[2]
-        mask = batch[3]
+        rsu_network_idx[rsu_network_idx>0] -= 1
+        mask = batch[3][:,1:]
 
         q_values, pointer_argmaxs, new_mask = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
@@ -203,7 +204,7 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = False
+    save_model_bool = True
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)

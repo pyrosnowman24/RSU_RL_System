@@ -79,7 +79,7 @@ class PointerNetwork(nn.Module):
         # print("decoder transform",decoder_transform)
 
         # (B, Nd, Ne) <- (B, Nd, Ne, C), (B, Nd, 1, C)
-        prod = self.v(torch.tanh(encoder_transform + decoder_transform)).squeeze(-1)
+        prod = self.v(torch.relu(encoder_transform + decoder_transform)).squeeze(-1)
         # print("pointer output",prod.shape)
         # print("pointer output",prod)
 
