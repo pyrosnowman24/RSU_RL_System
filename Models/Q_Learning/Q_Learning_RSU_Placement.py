@@ -156,6 +156,9 @@ class QL_System(LightningModule):
             self.save_data()
         return loss.float()
 
+    def training_epoch_end(self,output):
+        self.q_learning.target_network.load_state_dict(self.q_learning.network.state_dict())
+
     def configure_optimizers(self):
         policy_gradient_optim = Adam(self.q_learning.network.parameters(),lr = self.lr)
         return policy_gradient_optim
@@ -200,7 +203,7 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = True
+    save_model_bool = False
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
