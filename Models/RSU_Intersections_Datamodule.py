@@ -42,7 +42,7 @@ class RSU_Intersection_Dataset(Dataset):
         # This version creates a new scenario each time its called
         intersection_idx = np.random.choice(self.agent.network_intersections.shape[0],size = np.random.randint(low=self.min_intersections, high=self.max_intersections + 1) , replace=False)
         rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
-        rsu_network_idx += 1
+        rsu_network_idx
 
         intersections = self.agent.get_simulated_intersections(intersection_idx)
 
@@ -104,7 +104,7 @@ class RSU_Intersection_Dataset(Dataset):
         mask = intersection_mask.copy()
         for i in range(rsu_mask.shape[0]):
             if bool(rsu_mask[i]) is True:
-                mask[rsu_network_idx[i]] = False
+                mask[rsu_network_idx[i]+1] = False
         return mask
 
 class RSU_Intersection_Datamodule(pl.LightningDataModule):

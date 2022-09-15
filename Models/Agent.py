@@ -53,8 +53,8 @@ class Agent:
         
         rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
         self.place_rsu_network(rsu_network)
-        process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True)
-        process2 = subprocess.Popen("./run -u Cmdenv",cwd=self.simulation_dir,shell=True)
+        process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True) #Sumo
+        process2 = subprocess.Popen("./run -u Cmdenv -M release",cwd=self.simulation_dir,shell=True) #Omnet
         # process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
@@ -80,9 +80,11 @@ class Agent:
         Returns:
             int: Reward for all RSUs in RSU network
         """
+        print(features)
         avg_features = np.nanmean(features,axis=1)
         avg_features[0] = -(300/avg_features[0])
         avg_features[1] = 200/avg_features[1,:]
+        print(avg_features)
         reward = np.multiply(avg_features,W)
         reward = np.sum(reward)
         reward = reward - len(reward)
@@ -125,16 +127,18 @@ class Agent:
             int: Reward for all RSUs in RSU network
         """
         # print("features",features)
+        print(features)
         features[0] = np.nan_to_num(features[0],nan = -104)
         features[1] = np.nan_to_num(features[1],nan = 0)
         features[0] = .005 * np.power(features[0,:]+104,2)
         features[1] = .00005 * np.power(features[1,:],2)
+        # print(features)
 
         # print("processed features",features)
 
         features = np.sum(features,axis=0)
         for i in range(len(features)):
-            features[i] += .15 * np.square(i)
+            features[i] -= .10 * np.square(i)
         # print(features)
         return features
 

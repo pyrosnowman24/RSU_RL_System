@@ -23,13 +23,17 @@ for rsu_network in rsu_history:
     avg_rsu /= 2
 print(avg_rsu)
 
-loss = history_df['loss'].to_numpy()
+loss = history_df['loss']
+
+loss = loss.mask(loss > loss.quantile(0.90)) # Removes outlies from loss, some are >10,000 when most are ~200 - 1000
+
+loss = loss.to_numpy()
 
 x = np.arange(0,len(loss)+1,step = 100)
 average = []
 
 for i in range(len(x)-1):
-    average.append(np.mean(loss[x[i]:x[i+1]]))
+    average.append(np.nanmean(loss[x[i]:x[i+1]]))
 print(average)
 
 fig,ax = plt.subplots(1)
