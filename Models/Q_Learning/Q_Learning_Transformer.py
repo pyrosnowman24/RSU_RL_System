@@ -144,19 +144,25 @@ class Actor(nn.Module):
 
             q_values.append(q_value[:, -1, :])
             new_maxes = masked_argmax[:, -1]
+            # print(mask)
+            # print(new_maxes)
             # print("New maxes",new_maxes)
             mask[0,new_maxes] = False
-            mask[:,0] = True # This is the choice that no RSU should be placed. 
+            # mask[:,0] = True # This is the choice that no RSU should be placed. 
             # mask = mask.unsqueeze(1).expand(-1, q_value.shape[1], -1)
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)
             # print('\n')
+            if (~mask).all():
+                break
+
             next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(intersections.shape[0], -1, self.c_embed)
             decoder_input = torch.cat((encoder_state[:,:1,:], torch.gather(encoder_state, dim=1, index=next_indices)), dim=1)
 
         q_values = torch.stack(q_values, dim=1)
         masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
-        
+        # print(masked_argmax)
+        # quit()
         return q_values, masked_argmaxs, mask
 
     def masked_max(
