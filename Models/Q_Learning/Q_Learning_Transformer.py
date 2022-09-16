@@ -134,6 +134,7 @@ class Actor(nn.Module):
         q_values = []
         masked_argmaxs = []
         for i in range(intersections.shape[1]):
+            if i == 0: mask[:,0] = False
             decoder_state = self.decoder(decoder_input,encoder_state)
             # print("decoder_state",decoder_state.shape)
 
@@ -148,7 +149,7 @@ class Actor(nn.Module):
             # print(new_maxes)
             # print("New maxes",new_maxes)
             mask[0,new_maxes] = False
-            # mask[:,0] = True # This is the choice that no RSU should be placed. 
+            mask[:,0] = True # This is the choice that no RSU should be placed. 
             # mask = mask.unsqueeze(1).expand(-1, q_value.shape[1], -1)
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)

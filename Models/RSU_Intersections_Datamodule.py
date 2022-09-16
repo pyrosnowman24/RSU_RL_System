@@ -42,7 +42,6 @@ class RSU_Intersection_Dataset(Dataset):
         # This version creates a new scenario each time its called
         intersection_idx = np.random.choice(self.agent.network_intersections.shape[0],size = np.random.randint(low=self.min_intersections, high=self.max_intersections + 1) , replace=False)
         rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
-        rsu_network_idx
 
         intersections = self.agent.get_simulated_intersections(intersection_idx)
 
@@ -80,7 +79,7 @@ class RSU_Intersection_Dataset(Dataset):
         intersection_idx_padded[1:len(intersections_idx)+1] = intersections_idx
         rsu_network_idx_padded[:len(rsu_network_idx)] = rsu_network_idx
 
-        intersection_mask[:len(intersections_idx)+1] = 1
+        intersection_mask[:len(intersections_idx)+1] = 1 # +1 takes care of the offset from the added first solution, which is to choose no intersections
         rsu_mask[:len(rsu_network_idx)] = 1
 
         intersection_mask = np.where(intersection_mask == 1, True, False)

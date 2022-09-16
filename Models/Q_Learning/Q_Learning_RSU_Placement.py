@@ -89,21 +89,17 @@ class QL_System(LightningModule):
         return self.q_learning(x)
 
     def training_step(self,batch):
-        intersections = batch[0][:,1:,:]
-        intersection_idx = batch[1][:,1:]
+        intersections = batch[0]
+        intersection_idx = batch[1]
         rsu_network_idx = batch[2]
-        rsu_network_idx[rsu_network_idx>0] -= 1
-        mask = batch[3][:,1:]
+        # rsu_network_idx[rsu_network_idx>0] -= 1
+        mask = batch[3]
+        q_values, pointer_argmaxs, new_mask = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask.clone())
+        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1 # the -1 shifts the indices to the left, which is needed when the first option is removed
 
-        q_values, pointer_argmaxs, new_mask = self.q_learning(intersections,intersection_idx,rsu_network_idx,mask)
-        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
-    
         with torch.no_grad():
-                next_state_values, maxed_args, new_mask = self.q_learning.target_network(intersections,mask)
-                if len(maxed_args[maxed_args>0]) > 0:
-                    next_state_values = next_state_values[0,range(next_state_values.shape[1]),maxed_args]
-                    # next_state_values = q_value_next[maxed_args>0]
-                else: next_state_values = torch.zeros(size = pointer_argmaxs.shape, requires_grad=True)
+                next_state_values, maxed_args, new_mask = self.q_learning.target_network(intersections,mask.clone())
+                next_state_values = next_state_values[0,range(next_state_values.shape[1]),maxed_args]
 
         # print(rsu_network_idx)
         # print(rsu_idx)
@@ -119,38 +115,38 @@ class QL_System(LightningModule):
             # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
             # scaled_reward = reward - self.running_average
 
-            scaled_padded_reward = self.pad_reward(reward, pointer_argmaxs)
+            padded_reward = self.pad_reward(reward, pointer_argmaxs)
 
             # print("State action values ",state_action_values, state_action_values.shape)
             # print("next state values",next_state_values, next_state_values.shape)
             # print("scaled reward",scaled_padded_reward, scaled_padded_reward.shape)
-            
-            loss = self.loss(state_action_values, next_state_values, scaled_padded_reward)
+            loss = self.loss(state_action_values, next_state_values, padded_reward)
 
             print("loss",loss)
         else:
             state_action_values = torch.zeros(size = pointer_argmaxs.shape, requires_grad=True)
-            reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
+            reward = torch.tensor([[0.0]],requires_grad=True,dtype=torch.float)
             # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
             # scaled_reward = reward - self.running_average
 
-            scaled_padded_reward = self.pad_reward(reward, pointer_argmaxs)
+            # scaled_padded_reward = self.pad_reward(reward, pointer_argmaxs)
 
             # print("State action values ",state_action_values, state_action_values.shape)
             # print("next state values",next_state_values, next_state_values.shape)
             # print("scaled reward",scaled_padded_reward, scaled_padded_reward.shape)
 
-            loss = self.loss(state_action_values, next_state_values, scaled_padded_reward)
+            # loss = self.loss(state_action_values, next_state_values, reward)
+            loss = torch.tensor(100.0,requires_grad=True,dtype=torch.float)
 
             print("loss",loss)
 
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
         intersection_test = intersection_idx.detach().numpy()
-        rsu_idx_test = rsu_idx.detach().numpy()
+        rsu_idx_test = pointer_argmaxs.detach().numpy()
         reward_test = reward.detach().numpy()
         loss_test = loss.detach().numpy()
+
         data = np.array((intersection_test,rsu_idx_test,reward_test,loss_test),dtype=object)
-        # print(data)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -181,13 +177,12 @@ class QL_System(LightningModule):
         """
         print('\n')
         print("rewards", rewards)
-        print("next state values", next_state_values)
-        print("next state values * gamma", next_state_values * gamma)
+        # print("next state values", next_state_values)
         print("state action values",state_action_values)
         print('\n')
 
         expected_state_action_values = next_state_values * gamma + rewards
-        return nn.MSELoss()(state_action_values,expected_state_action_values)
+        return nn.MSELoss()(state_action_values,rewards)
 
     def save_data(self):
         print("Saving Data")
@@ -209,7 +204,7 @@ if __name__ == '__main__':
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "q_learning_third_try"
+    model_name = "Training_for_Reward"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     if save_model_bool:

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import os, re
 
 directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-model_name = "q_learning_third_try"
+model_name = "Training_for_Reward"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
