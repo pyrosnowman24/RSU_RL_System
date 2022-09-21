@@ -29,7 +29,7 @@ loss = loss.mask(loss > loss.quantile(0.90)) # Removes outlies from loss, some a
 
 loss = loss.to_numpy()
 
-x = np.arange(0,len(loss)+1,step = 100)
+x = np.arange(0,len(loss)+1,step = 50)
 average = []
 
 for i in range(len(x)-1):

@@ -65,6 +65,8 @@ class Agent:
             reward = self.reward_pg(features,W)
         if model == "Q Learning":
             reward = self.reward_ql(features,W)
+        if model == "Q Learning Positive":
+            reward = self.reward_positive_ql(features,W)
         else:
             reward = self.reward(features,W)
 
@@ -141,6 +143,33 @@ class Agent:
             features[i] -= .10 * np.square(i)
         # print(features)
         return features
+
+    def reward_positive_ql(self,features,W):
+        """Reward for Q-Learning based model. The higher the reward the better the solution. This version will always be positive.
+
+        Args:
+            features (numpy.array): The valeus of each feature for all RSUs in network.
+            W (list): Used to bias rewards between features
+
+        Returns:
+            int: Reward for all RSUs in RSU network
+        """
+        # print("features",features)
+        print(features)
+        features[0] = np.nan_to_num(features[0],nan = -104)
+        features[1] = np.nan_to_num(features[1],nan = 0)
+        features[0] = .005 * np.power(features[0,:]+104,2)
+        features[1] = .00005 * np.power(features[1,:],2)
+        # print(features)
+
+        # print("processed features",features)
+
+        features = np.sum(features,axis=0)
+        for i in range(len(features)):
+            features[i] *= .90 * 1/(np.square(i)+1)
+        # print(features)
+        return features
+
 
     def kill_sumo_env(self):
         print('\n',os.path.exists("sumo-launchd.pid"),'\n')
