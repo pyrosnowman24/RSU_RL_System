@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import os, re
 
 directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-model_name = "Training_for_Reward"
+model_name = "Training_for_Reward_L1Loss"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
@@ -25,7 +25,7 @@ print(avg_rsu)
 
 loss = history_df['loss']
 
-loss = loss.mask(loss > loss.quantile(0.90)) # Removes outlies from loss, some are >10,000 when most are ~200 - 1000
+# loss = loss.mask(loss > loss.quantile(0.90)) # Removes outlies from loss, some are >10,000 when most are ~200 - 1000
 
 loss = loss.to_numpy()
 

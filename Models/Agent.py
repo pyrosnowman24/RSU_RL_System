@@ -14,7 +14,8 @@ class Agent:
     def __init__(self):
         self.setup_paths()
         self.setup_simulation(index=0)
-        self.network_intersections = torch.Tensor(self.prepare_intersections()) # The coordinates of all intersections
+        network_intersections = self.prepare_intersections()
+        self.network_intersections = torch.Tensor(network_intersections) # The coordinates of all intersections
 
     def setup_paths(self):
         self.parent_dir ="/home/acelab/veins_sim/"
@@ -160,14 +161,12 @@ class Agent:
         features[1] = np.nan_to_num(features[1],nan = 0)
         features[0] = .005 * np.power(features[0,:]+104,2)
         features[1] = .00005 * np.power(features[1,:],2)
-        # print(features)
 
         # print("processed features",features)
 
         features = np.sum(features,axis=0)
-        for i in range(len(features)):
-            features[i] *= .90 * 1/(np.square(i)+1)
-        # print(features)
+        for i in range(1,len(features)):
+            features[i] *= -.1*np.log(i+1)+1
         return features
 
 
@@ -405,22 +404,29 @@ class Agent:
         return intersections
 
     def find_junctions(self,lines):
-        intersections = np.empty((0,3))
+        intersections = np.empty((0,5))
         for i,line in enumerate(lines):
             if "<junction " in line:
-                x = re.search('x=\"(.*?)\" ', line)
-                if x is not None: x = float(x.group(1))
-                else: continue
-                y = re.search('y=\"(.*?)\" ', line)
-                if y is not None: y = float(y.group(1))
-                else: continue
-                z = re.search('z=\"(.*?)\" ', line)
-                if z is not None: z = float(z.group(1))
-                else: z = 0
-                coords = np.array((x,y,z))
-                coords = np.reshape(coords,(1,3))
-                coords[0,:2] = self.traci2omnet(coords[0,0],coords[0,1])
-                intersections = np.append(intersections, coords, axis=0)
+                id = re.search('id=\"(.*?)\" ', line)
+                id = id.group(1)
+                if id.isnumeric(): # This sorts out internal junctions, which are used to represent turns in the road
+                    if id is not None: id = int(id)
+                    else:continue
+                    x = re.search('x=\"(.*?)\" ', line)
+                    if x is not None: x = float(x.group(1))
+                    else: continue
+                    y = re.search('y=\"(.*?)\" ', line)
+                    if y is not None: y = float(y.group(1))
+                    else: continue
+                    z = re.search('z=\"(.*?)\" ', line)
+                    if z is not None: z = float(z.group(1))
+                    else: z = 0
+
+                    incLanes, len_incLanes = self.get_incLanes(line)
+                    coords = np.array((id,x,y,z,len_incLanes))
+                    coords = np.reshape(coords,(1,5))
+                    coords[0,1:3] = self.traci2omnet(coords[0,1],coords[0,2])
+                    intersections = np.append(intersections, coords, axis=0)
         return intersections
 
     def create_projection(self,lines):
@@ -459,7 +465,7 @@ class Agent:
         Returns:
             numpy.ndArray: Array of coordinates for the RSU network.
         """
-        intersections = self.network_intersections[sim_idx[rsu_net_idx],:]
+        intersections = self.network_intersections[sim_idx[rsu_net_idx],1:-1]
         return intersections
 
     def get_simulated_intersections(self,idx):
@@ -475,9 +481,24 @@ class Agent:
         intersections = self.network_intersections[idx,:]
         return intersections
 
+    def get_incLanes(self,line):
+        incLanes = np.empty(shape = 0, dtype=object)
+        temp = []
+        x = re.search('incLanes=\"(.*?)\" ', line)
+        x = x.group(1)
+        x = re.sub('[^0-9]+', ' ', x)
+        x = x.split(' ')
+        x = [ value for value in x if value.isdigit() ]
+        for value in x:
+            if int(value) > 100:
+                temp.append(int(value))
+        unique = np.unique(temp)
+        incLanes = np.append(incLanes,unique)
+        return incLanes, len(incLanes)
+
 # sim_rsu_place = Agent()
 
 # intersection_ids = np.random.choice(sim_rsu_place.network_intersections.shape[0],size = 10,replace=False)
 # rsu_ids = np.random.choice(intersection_ids.shape[0],size = 5,replace=False)
-
 # reward = sim_rsu_place.simulation_step(rsu_ids,intersection_ids)
+

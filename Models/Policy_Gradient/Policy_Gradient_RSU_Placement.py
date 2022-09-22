@@ -181,6 +181,12 @@ if __name__ == '__main__':
     model_name = "test"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
+
+    checkpoint_name = "Training_for_Reward"
+    checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
+    checkpoint_path = os.path.join(checkpoint_directory,checkpoint_name)
+
+
     if save_model_bool:
             os.makedirs(model_directory)
     if train_new_model:
@@ -193,6 +199,10 @@ if __name__ == '__main__':
             save_model(model,model_directory,model_path)
 
     else:
-        model = PG_System(simulation_agent)
-        model.load_state_dict(torch.load(model_path))
-        model.eval()
+        model = PG_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model.load_state_dict(torch.load(checkpoint_path))
+        trainer = Trainer(max_epochs = max_epochs)
+        datamodule = RSU_Intersection_Datamodule(simulation_agent)
+        trainer.fit(model,datamodule=datamodule)
+        if save_model_bool:
+            save_model(model,model_directory,model_path)

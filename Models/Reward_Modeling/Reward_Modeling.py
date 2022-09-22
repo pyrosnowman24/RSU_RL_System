@@ -44,10 +44,10 @@ class ExperienceSourceDataset(IterableDataset):
         iterator = self.generate_batch()
         return iterator
 
-class QL_System(LightningModule):
+class RW_System(LightningModule):
     def __init__(self,
                  agent,
-                 num_features: int = 3,
+                 num_features: int = 4,
                  nhead: int = 4,
                  batch_size: int = 100,
                  max_num_rsu: int = 20,
@@ -58,7 +58,7 @@ class QL_System(LightningModule):
                  model_directory = "/home/acelab/",
                  save_data_bool:bool = False):
 
-        super(QL_System,self).__init__()
+        super(RW_System,self).__init__()
         
         self.num_features = num_features
         self.nhead = nhead
@@ -77,8 +77,8 @@ class QL_System(LightningModule):
                                          n_layers = self.n_layers)
 
         # self.df_history = pd.DataFrame(columns=["intersections","intersection_idx","pre_rsu_network","rsu_network","reward","loss"],dtype=object)
-        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","loss"],dtype=object)
-        self.df_new_data = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","loss"],dtype=object)
+        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","loss"],dtype=object)
+        self.df_new_data = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","loss"],dtype=object)
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
@@ -89,7 +89,7 @@ class QL_System(LightningModule):
         return self.reward_modeling(x)
 
     def training_step(self,batch):
-        intersections = batch[0]
+        intersections = batch[0][:,:,1:]
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         # rsu_network_idx[rsu_network_idx>0] -= 1
@@ -113,12 +113,14 @@ class QL_System(LightningModule):
         print("loss",loss)
 
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        intersection_test = intersection_idx.detach().numpy()
+        intersection_test = intersection_idx.detach().numpy()[0,:]
         rsu_idx_test = pointer_argmaxs.detach().numpy()
+        rsu_idx_test = rsu_idx_test[rsu_idx_test>0]
         reward_test = rewards.detach().numpy()
+        critic_reward_test = rewards_critic.detach().numpy()
         loss_test = loss.detach().numpy()
 
-        data = np.array((intersection_test,rsu_idx_test,reward_test,loss_test),dtype=object)
+        data = np.array((intersection_test,rsu_idx_test,reward_test,critic_reward_test,loss_test),dtype=object)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -165,19 +167,25 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = True
+    save_model_bool = False
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "Training_for_Reward"
+    model_name = "Training_for_Reward_4features"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
+
+    checkpoint_name = "Training_for_Reward"
+    checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
+    checkpoint_path = os.path.join(checkpoint_directory,checkpoint_name)
+
+
     if save_model_bool:
             os.makedirs(model_directory)
     if train_new_model:
         simulation_agent = Agent()
-        model = QL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model = RW_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
         trainer = Trainer(max_epochs = max_epochs)
         datamodule = RSU_Intersection_Datamodule(simulation_agent)
         trainer.fit(model,datamodule=datamodule)
@@ -185,6 +193,11 @@ if __name__ == '__main__':
             save_model(model,model_directory,model_path)
 
     else:
-        model = QL_System(simulation_agent)
-        model.load_state_dict(torch.load(model_path))
-        model.eval()
+        model = RW_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model.load_state_dict(torch.load(checkpoint_path))
+        trainer = Trainer(max_epochs = max_epochs)
+        datamodule = RSU_Intersection_Datamodule(simulation_agent)
+        trainer.fit(model,datamodule=datamodule)
+        if save_model_bool:
+            save_model(model,model_directory,model_path)
+        

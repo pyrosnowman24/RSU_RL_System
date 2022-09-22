@@ -108,12 +108,11 @@ class Actor(nn.Module):
     def __init__(self,num_features = 3,
                       nhead = 4,
                       W = [.5,.5],
-                      c_inputs = 3,
                       c_embed = 16,
                       n_layers = 1):
         super(Actor,self).__init__()
         self.c_embed = c_embed
-        self.embedding = Embedding(c_inputs,c_embed)
+        self.embedding = Embedding(num_features,c_embed)
         self.encoder = Encoder(c_embed,nhead,n_layers)
         self.decoder = Decoder(c_embed,nhead,n_layers)
         self.pointer = PointerNetwork(c_embed)
@@ -233,7 +232,6 @@ class Reward_Modeling(nn.Module):
                      intersection_idx: torch.Tensor,
                      rsu_network_idx: torch.Tensor,
                      mask: torch.Tensor):
-
         q_values, pointer_argmaxs, mask = self.network(intersections,mask)
         return q_values, pointer_argmaxs, mask
 
