@@ -60,18 +60,20 @@ class Agent:
         process2.wait()
         process3 = subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
 
-        # features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","TotalLostPackets"])
+        # features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
+        # features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts","TotalLostPackets"])
         features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
+
         if model == "Policy Gradient":
             reward = self.reward_pg(features,W)
         if model == "Q Learning":
             reward = self.reward_ql(features,W)
         if model == "Q Learning Positive":
-            reward = self.reward_positive_ql(features,W)
+            reward, features = self.reward_positive_ql(features,W)
         else:
             reward = self.reward(features,W)
 
-        return reward
+        return reward, features
 
     def reward(self,features,W):
         """Reward for Actor Critic based model. The higher the reward the better the solution.
@@ -155,19 +157,19 @@ class Agent:
         Returns:
             int: Reward for all RSUs in RSU network
         """
-        # print("features",features)
+        original_features = np.copy(features)
         print(features)
-        features[0] = np.nan_to_num(features[0],nan = -104)
-        features[1] = np.nan_to_num(features[1],nan = 0)
-        features[0] = .005 * np.power(features[0,:]+104,2)
-        features[1] = .00005 * np.power(features[1,:],2)
+        original_features[0] = np.nan_to_num(original_features[0],nan = -104)
+        original_features[1] = np.nan_to_num(original_features[1],nan = 0)
+        original_features[0] = (.017 * np.power(original_features[0,:]+104,2))/100
+        original_features[1] = (.00005 * np.power(original_features[1,:],2))/100
 
         # print("processed features",features)
 
-        features = np.sum(features,axis=0)
-        for i in range(1,len(features)):
-            features[i] *= -.1*np.log(i+1)+1
-        return features
+        original_features = np.sum(original_features,axis=0)
+        for i in range(1,len(original_features)):
+            original_features[i] *= -.1*np.log(i+1)+1
+        return original_features, features
 
 
     def kill_sumo_env(self):

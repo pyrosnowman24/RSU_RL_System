@@ -1,5 +1,6 @@
 from ctypes import pointer
 from json import encoder
+from multiprocessing import reduction
 from tkinter import Variable
 from tkinter.filedialog import askdirectory
 from typing import List, Tuple, Callable, Iterator
@@ -77,8 +78,8 @@ class RW_System(LightningModule):
                                          n_layers = self.n_layers)
 
         # self.df_history = pd.DataFrame(columns=["intersections","intersection_idx","pre_rsu_network","rsu_network","reward","loss"],dtype=object)
-        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","loss"],dtype=object)
-        self.df_new_data = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","loss"],dtype=object)
+        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","loss"],dtype=object)
+        self.df_new_data = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","loss"],dtype=object)
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
@@ -92,19 +93,19 @@ class RW_System(LightningModule):
         intersections = batch[0][:,:,1:]
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
-        # rsu_network_idx[rsu_network_idx>0] -= 1
         mask = batch[3]
-        q_values, pointer_argmaxs, new_mask = self.reward_modeling(intersections,intersection_idx,rsu_network_idx,mask.clone())
-        rsu_idx = pointer_argmaxs[pointer_argmaxs>0] # the -1 shifts the indices to the left, which is needed when the first option is removed
+        intersection_idx = intersection_idx[mask][1:]
 
-        rsu_network = intersections[:,rsu_idx]
+        rsu_idx = np.random.choice(np.arange(len(intersection_idx)),size = np.random.randint(low=1, high=len(intersection_idx)),replace=False)
 
+        intersections = intersections[mask][1:,:]
 
-        rewards = self.agent.simulation_step(rsu_idx-1,intersection_idx[0,1:],model = "Q Learning Positive")
+        rsu_network = intersections[rsu_idx,:]
+
+        rewards, features = self.agent.simulation_step(rsu_idx,intersection_idx,model = "Q Learning Positive")
         rewards = torch.tensor([np.array(rewards)],requires_grad=True,dtype=torch.float)
         
         rewards_critic = self.reward_modeling.reward_network(rsu_network)
-
         print("rewards",rewards)
         print("critics rewards",rewards_critic)
         
@@ -112,15 +113,14 @@ class RW_System(LightningModule):
 
         print("loss",loss)
 
-        # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        intersection_test = intersection_idx.detach().numpy()[0,:]
-        rsu_idx_test = pointer_argmaxs.detach().numpy()
-        rsu_idx_test = rsu_idx_test[rsu_idx_test>0]
+        intersection_test = intersection_idx.detach().numpy()
+        rsu_idx_test = rsu_idx
+        features_test = features
         reward_test = rewards.detach().numpy()
         critic_reward_test = rewards_critic.detach().numpy()
         loss_test = loss.detach().numpy()
 
-        data = np.array((intersection_test,rsu_idx_test,reward_test,critic_reward_test,loss_test),dtype=object)
+        data = np.array((intersection_test,rsu_idx_test,features,reward_test,critic_reward_test,loss_test),dtype=object)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -150,7 +150,7 @@ class RW_System(LightningModule):
             loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
         """
 
-        return nn.MSELoss()(rewards,rewards_critic)
+        return nn.MSELoss(reduction = 'mean')(rewards,rewards_critic)
 
     def save_data(self):
         print("Saving Data")
@@ -167,12 +167,12 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = False
+    save_model_bool = True
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "Training_for_Reward_4features"
+    model_name = "Random_RSU_Network"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 

@@ -212,7 +212,7 @@ class Critic(nn.Module):
         embedded_state = self.embedding(intersections)
 
         rewards = []
-        for sample in embedded_state[0,:,:]:
+        for sample in embedded_state:
             reward = self.network(sample)
             rewards.append(reward)
         rewards = torch.stack(rewards,dim=1)
