@@ -6,6 +6,31 @@ import torch.nn.functional as F
 
 import numpy as np
 
+class Embedding(nn.Module):
+    def __init__(self,c_inputs,c_embed):
+        super(Embedding,self).__init__()
+        self.embedding_layer = nn.Linear(c_inputs, c_embed, bias=False)
+
+    def forward(self,data):
+        return self.embedding_layer(data)
+
+class Encoder(nn.Module):
+    def __init__(self,num_features,nhead,n_layers = 1):
+        super(Encoder,self).__init__()
+        transformer_layer = nn.TransformerEncoderLayer(num_features,nhead,batch_first=True)
+        self.transformer = nn.TransformerEncoder(transformer_layer,n_layers)
+
+    def forward(self,intersections):
+        return self.transformer(intersections)
+
+class Decoder(nn.Module):
+    def __init__(self,num_features,nhead,n_layers = 1):
+        super(Decoder,self).__init__()
+        transformer_layer = nn.TransformerDecoderLayer(num_features,nhead,batch_first=True)
+        self.transformer = nn.TransformerDecoder(transformer_layer,n_layers)
+
+    def forward(self,rsu_intersections,encoder_state):
+        return self.transformer(rsu_intersections,encoder_state)
 
 class Attention(nn.Module):
     """Calculates attention over the input nodes given the current state."""
@@ -82,169 +107,110 @@ class Pointer(nn.Module):
 
         return probs, current_hh
 
-class Encoder(nn.Module):
-    """Encodes the static states using 1d Convolution."""
-
-    def __init__(self, input_size, hidden_size):
-        super(Encoder, self).__init__()
-        self.conv = nn.Conv1d(input_size, hidden_size, kernel_size=1)
-
-    def forward(self, input):
-        output = self.conv(input)
-        return output  # (batch, hidden_size, seq_len)
-
-class Decoder(nn.Module):
-    """Decodes the hidden states using 1d Convolution."""
-
-    def __init__(self, input_size, hidden_size):
-        super(Decoder, self).__init__()
-        self.conv = nn.Conv1d(input_size, hidden_size, kernel_size=1)
-
-    def forward(self, input):
-        output = self.conv(input)
-        return output  # (batch, hidden_size, seq_len)
-
 class Actor(nn.Module):
-    """Defines the main Encoder, Decoder, and Pointer combinatorial models.
+    def __init__(self,num_features = 3,
+                      nhead = 4,
+                      W = [.5,.5],
+                      c_embed = 16,
+                      n_layers = 1):
+        super(Actor,self).__init__()
+        self.c_embed = c_embed
+        self.embedding = Embedding(num_features,c_embed)
+        self.encoder = Encoder(c_embed,nhead,n_layers)
+        self.decoder = Decoder(c_embed,nhead,n_layers)
+        self.pointer = Pointer(c_embed)
+        self.W = W
 
-    Parameters
-    ----------
-    static_size: int
-        Defines how many features are in the static elements of the model
-        (e.g. 2 for (x, y) coordinates)
-    hidden_size: int
-        Defines the number of units in the hidden layer for all static
-        and decoder output units.
-    num_layers: int, optional
-        Specifies the number of hidden layers to use in the decoder RNN, by default 1
-    dropout: float, optional
-        Defines the dropout rate for the decoder, by default 0
-    """
+    def forward(self,intersections,mask):
+        # print("Input shape",intersections.shape)
 
-    def __init__(self, state_size, hidden_size, device, num_layers=1, dropout=0.):
-        super(Actor, self).__init__()
-        # Define the encoder & decoder models
-        self.state_encoder = Encoder(state_size, hidden_size)
-        self.decoder = Decoder(state_size, hidden_size)
-        self.pointer = Pointer(hidden_size, device, num_layers, dropout)
-        self.device = device
+        embedded_state = self.embedding(intersections)
+        # print("embedded_state",embedded_state.shape)
 
-        for p in self.parameters():
-            if len(p.shape) > 1:
-                nn.init.xavier_uniform_(p)
+        encoder_state = self.encoder(embedded_state)
+        # print("encoder_state",encoder_state.shape)
 
-        # Used as a proxy initial state in the decoder when not specified
-        self.x0 = torch.zeros((1,state_size, 1), requires_grad=True, device=self.device)
+        decoder_input = encoder_state[:,:1,:]
+        # print("decoder input shape",decoder_input.shape)
 
-    def forward(self, state, intersections, previous_action=None, last_hh=None):
-        """
-        Parameters
-        ----------
-        state: Array of size (num_intersections)
-            Mask of the intersections that are selected for the RSU network.
-        previous_action: Array of size (num_intersections)
-            One hot array defining the last intersection that was selected.
-        intersections: Array of size (feats,num_intersections)
-            Defines the features for all intersections.
-        last_hh: Array of size (num_hidden)
-            Defines the last hidden state for the RNN
-        """
-        action = torch.ones(*state.shape,dtype=torch.int)
-        encoder_input = intersections
-        # encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==1)[1]).expand(*intersections.shape[0:2],-1)).detach()
+        q_values = []
+        masked_argmaxs = []
+        for i in range(intersections.shape[1]):
+            if i == 0: mask[:,0] = False
+            decoder_state = self.decoder(decoder_input,encoder_state)
+            # print("decoder_state",decoder_state.shape)
 
-        if previous_action is None: # If there was not a previous action set encoder input to 0
-            decoder_input = self.x0
-        else:
-            decoder_input = torch.gather(intersections, 2, torch.argmin(previous_action).expand(*intersections.shape[0:2],1)).detach()
-        # Applies encoding to all potential intersections
-        state_hidden = self.state_encoder(encoder_input)
-        decoder_hidden = self.decoder(decoder_input)
-        probs, current_hh = self.pointer(state_hidden, decoder_hidden, last_hh)
+            q_value = self.pointer(decoder_state,encoder_state)
+            # print("Pointer output shape",q_value.shape)
+            _, masked_argmax = self.masked_max(q_value,mask, dim=-1)
+            # print("masked argmax",masked_argmax)
 
-        probs = F.softmax(probs + state.log(), dim=1)
-        # When training, sample the next step according to its probability.
-        # During testing, we can take the greedy approach and choose highest
-        if self.training:
-            m = torch.distributions.Categorical(probs)
+            q_values.append(q_value[:, -1, :])
+            new_maxes = masked_argmax[:, -1]
+            # print(mask)
+            # print(new_maxes)
+            # print("New maxes",new_maxes)
+            mask[0,new_maxes] = False
+            mask[:,0] = True # This is the choice that no RSU should be placed. 
+            # mask = mask.unsqueeze(1).expand(-1, q_value.shape[1], -1)
+            masked_argmaxs.append(new_maxes)
+            # print("masked argmaxes array",masked_argmaxs)
+            # print('\n')
+            if (~mask).all():
+                break
 
-            ptr = m.sample()
-            while not torch.gather(state, 1, ptr.data.unsqueeze(1)).byte().all():
-                ptr = m.sample()
-            logp = m.log_prob(ptr)
-        else:
-            prob, ptr = torch.max(probs,1)  # Greedy
-            logp = prob.log()
+            next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(intersections.shape[0], -1, self.c_embed)
+            decoder_input = torch.cat((encoder_state[:,:1,:], torch.gather(encoder_state, dim=1, index=next_indices)), dim=1)
 
-        RSU_logp = logp.unsqueeze(1)
-        RSU_idx = ptr.data.unsqueeze(1)
-
-        
-        action[0,RSU_idx] = 0
-
-        return action, RSU_logp, current_hh
+        q_values = torch.stack(q_values, dim=1)
+        masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
+        # print(masked_argmax)
+        # quit()
+        return q_values, masked_argmaxs, mask
 
 class Critic(nn.Module):
-    """Estimates the problem complexity.
-    """
+    def __init__(self,num_features = 3,
+                      c_embed = 16 ):
+        super(Critic,self).__init__()
+        self.embedding = Embedding(num_features,c_embed)
+        self.network = nn.Sequential(nn.Linear(c_embed,16),
+                                     nn.ReLU(),
+                                     nn.Linear(16,32),
+                                     nn.ReLU(),
+                                     nn.Linear(32,16),
+                                     nn.ReLU(),
+                                     nn.Linear(16,1))
+        
 
-    def __init__(self, static_size, hidden_size):
-        super(Critic, self).__init__()
+    def forward(self,intersections):
+        embedded_state = self.embedding(intersections)
 
-        self.static_encoder = Encoder(static_size, hidden_size)
+        rewards = []
+        for sample in embedded_state:
+            reward = self.network(sample)
+            rewards.append(reward)
+        rewards = torch.stack(rewards,dim=1)
 
-        # Define the encoder & decoder models
-        self.fc1 = nn.Conv1d(hidden_size, 20, kernel_size=1)
-        self.fc2 = nn.Conv1d(20, 20, kernel_size=1)
-        self.fc3 = nn.Conv1d(20, 1, kernel_size=1)
-
-        for p in self.parameters():
-            if len(p.shape) > 1:
-                nn.init.xavier_uniform_(p)
-    def forward(self, state, intersections):
-
-        encoder_input = intersections
-        # encoder_input = torch.gather(intersections, 2, torch.from_numpy(np.where(state.detach().numpy()==1)[1]).expand(*intersections.shape[0:2],-1)).detach()
-
-        hidden = self.static_encoder(encoder_input)
-
-        output = F.relu(self.fc1(hidden))
-        output = F.relu(self.fc2(output))
-        output = self.fc3(output).sum(dim=2)
-        return output
+        return rewards
 
 class Actor_Critic(nn.Module):
-    def __init__(self, actor_net: nn.Module, 
-                       critic_net: nn.Module, 
-                       agent, 
-                       device = 'cpu') -> None:
-        super().__init__()
-        self.actor_net = actor_net
-        self.critic_net = critic_net
-        self.agent = agent
-
-        self.previous_action = None
-        self.previous_hh = None
-        self.device = device
+    def __init__(self, num_features: int,
+                       nhead: int,
+                       W = [.5,.5],
+                       n_layers = 1) -> None:
+        super(Actor_Critic,self).__init__()
+        self.actor = Actor(num_features,nhead,W = W, n_layers = n_layers)
+        self.critic = Critic(num_features)
     
-    def forward(self,state: torch.Tensor) -> Tuple:
-        state = state.to(self.device)
-        intersections = self.agent.intersections
-        # rsu_intersections = torch.gather(intersections, 1, torch.argmin(state).expand(*intersections.shape)).detach()
-        # if len(self.batch_actions) == 0: previous_action = None # If there was no previous action
-        # else: previous_action = self.batch_actions[-1]
+    def forward(self,intersections: torch.Tensor,
+                     mask: torch.Tensor):
+        
+        log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
+        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
+        rsu_network = intersections[rsu_idx,:]
+        critic_reward = self.critic(rsu_network)
 
-        # if len(self.last_hhs) == 0: last_hh = None
-        # else: last_hh = self.last_hhs[-1]
-
-        action, logp, current_hh = self.actor_net(state, intersections, self.previous_action, self.previous_hh)
-        critic_reward = self.critic_net(state, intersections).view(-1)
-
-        # Save for next run of the actor
-        self.previous_action = action.detach()
-        self.previous_hh = current_hh.detach()
-
-        return action, logp, critic_reward
+        return log_pointer_scores, pointer_argmaxs, rsu_network, critic_reward
 
     def reset(self) -> None:
         self.previous_action = None

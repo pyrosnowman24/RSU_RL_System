@@ -49,9 +49,6 @@ class PG_System(LightningModule):
                  agent,
                  num_features: int = 3,
                  nhead: int = 4,
-                 batch_size: int = 100,
-                 max_num_rsu: int = 20,
-                 episodes_per_epoch: int = 200,
                  W: int = [.5,.5],
                  n_layers: int = 1,
                  lr = 1e-4,
@@ -63,10 +60,6 @@ class PG_System(LightningModule):
         self.num_features = num_features
         self.nhead = nhead
         self.lr = lr
-
-        self.max_num_rsu = max_num_rsu
-        self.episodes_per_epoch = episodes_per_epoch
-        self.batch_size = batch_size
         self.W = W
         self.n_layers = n_layers
 

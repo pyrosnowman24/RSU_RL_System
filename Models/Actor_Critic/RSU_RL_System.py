@@ -2,6 +2,8 @@ from json import encoder
 from tkinter import Variable
 from typing import List, Tuple, Callable, Iterator
 from collections import OrderedDict, deque, namedtuple
+import sys
+import os
 
 import torch
 from torch import Tensor, nn
@@ -13,8 +15,14 @@ from torch.utils.data.dataset import IterableDataset
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from Agent import Agent
-from Actor_Critic import Actor_Critic, Actor, Critic
+currentdir = os.path.dirname(os.path.realpath(__file__))
+parentdir = os.path.dirname(currentdir)
+parentdir2 = os.path.dirname(parentdir)
+sys.path.append(parentdir2)
+
+from Models.Agent import Agent
+from Models.Actor_Critic.Actor_Critic import Actor_Critic
+from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 
 import numpy as np
 import argparse
@@ -36,62 +44,19 @@ class ExperienceSourceDataset(IterableDataset):
         return iterator
 
 class DRL_System(LightningModule):
-    def __init__(self, train_size: int = 120000,
-                       valid_size: int = 1000, 
-                       hidden_size: int = 128,
-                       batch_size: int = 100,
-                       num_layers: int = 1, 
-                       dropout: float = 0.1, 
-                       actor_lr: float = 5e-4,
-                       critic_lr: float = 5e-4, 
-                       state_size: int = 3,
-                       max_num_rsu: int = 20,
-                       episodes_per_epoch: int = 200,
-                       number_nodes: int = 100,
-                       W: int = [.5,.5]):
-        """DRL model for solving RSU placement problem
-
-        Args:
-            train_size (int, optional): _description_. Defaults to 120000.
-            valid_size (int, optional): _description_. Defaults to 1000.
-            hidden_size (int, optional): _description_. Defaults to 128.
-            num_layers (int, optional): _description_. Defaults to 1.
-            dropout (float, optional): _description_. Defaults to 0.1.
-            actor_lr (float, optional): _description_. Defaults to 5e-4.
-            critic_lr (float, optional): _description_. Defaults to 5e-4.
-            batch_size (int, optional): _description_. Defaults to 200.
-            state_size (int, optional): _description_. Defaults to 4.
-            checkpoint (str, optional): _description_. Defaults to None.
-            w1 (int, optional): _description_. Defaults to 1.
-            w2 (int, optional): _description_. Defaults to 0.
-        """
+    def __init__(self, 
+                     agent,
+                     num_features: int = 4,
+                     num_layers: int = 1, 
+                     actor_lr: float = 5e-4,
+                     critic_lr: float = 5e-4, 
+                     W: int = [.5,.5]):
 
         super(DRL_System,self).__init__()
-        self.train_size = train_size
-        self.valid_size = valid_size
-        self.hidden_size = hidden_size
-        self.batch_size = batch_size
         self.num_layers = num_layers
-        self.dropout = dropout
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
-        self.state_size = state_size
-        self.max_num_rsu = max_num_rsu
-        self.episodes_per_epoch = episodes_per_epoch
         self.W = W
-
-        self.agent = Agent()
-
-        self.actor = Actor(state_size,
-                           self.hidden_size,
-                           self.device,
-                           self.num_layers,
-                           self.dropout).to(self.device)
-
-        self.critic = Critic(state_size,
-                             self.hidden_size).to(self.device)
-
-        
 
         self.actor_critic = Actor_Critic(self.actor, self.critic, self.agent, self.device)
 
@@ -137,10 +102,9 @@ class DRL_System(LightningModule):
         critic_loss.requires_grad = True
         return critic_loss
 
-    def forward(self,x: Tensor) -> Tensor:
-        # This must be redone based on the new actor call method, it should still return an RSU network
-        rsu_indicies, _, _ = self.actor_critic(x)
-        return rsu_indicies
+    def forward(self,intersections: Tensor, mask: Tensor) -> Tensor:
+        _, _, rsu_network, critic_reward = self.actor_critic(intersections, mask)
+        return rsu_network, critic_reward
 
     def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
         states, actions, logps, advantages = batch
@@ -191,7 +155,6 @@ class DRL_System(LightningModule):
                 self.episode_states = np.vstack((self.episode_states,self.agent.state.numpy()[0]))
                 action, logp, critic_reward = self.actor_critic(self.agent.state[None,:,:]) 
                 
-                quit()
                 _, reward, simulation_done = self.agent.simulation_step(action,self.W)
                 
                 self.episode_logp = np.vstack((self.episode_logp,logp.detach().numpy()[0][0]))
@@ -258,26 +221,43 @@ class DRL_System(LightningModule):
         """Get train loader."""
         return self._dataloader()
 
+def save_model(model,model_directory,model_path):
+        model_history_file = os.path.join(model_directory,"model_history.csv")
+        torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
+    max_epochs = 25
+    train_new_model = True
+    save_model_bool = False
+    display_figures = True
 
-    parser = argparse.ArgumentParser(description='Combinatorial Optimization')
-    parser.add_argument('--number_nodes', default=50, type=float)
-    parser.add_argument('--actor_lr', default=5e-4, type=float)
-    parser.add_argument('--critic_lr', default=5e-4, type=float)
-    parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--hidden', dest='hidden_size', default=128, type=int)
-    parser.add_argument('--dropout', default=0.1, type=float)
-    parser.add_argument('--layers', dest='num_layers', default=1, type=int)
-    parser.add_argument('--train-size',default=120000, type=int)
-    parser.add_argument('--valid-size', default=1000, type=int)
-    parser.add_argument('--max_num_rsu', default=20, type=int)
-    parser.add_argument('--episodes_per_epoch', default=32, type=int)
-    args, unknown = parser.parse_known_args()
-    T = 100
-    w2_list = np.arange(T+1)/T
-    w1_list = 1-w2_list
+    simulation_agent = Agent()
+    trainer = Trainer(max_epochs = max_epochs)
+    directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
+    model_name = "Training_for_Reward"
+    model_directory = os.path.join(directory_path,model_name+'/')
+    model_path = os.path.join(model_directory,model_name)
 
-    model = DRL_System(**args.__dict__)
-    trainer = Trainer(max_epochs = 1)
-    trainer.fit(model)
+    checkpoint_name = "Training_for_Reward"
+    checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
+    checkpoint_path = os.path.join(checkpoint_directory,checkpoint_name)
+
+    if save_model_bool:
+            os.makedirs(model_directory)
+    if train_new_model:
+        simulation_agent = Agent()
+        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        trainer = Trainer(max_epochs = max_epochs)
+        datamodule = RSU_Intersection_Datamodule(simulation_agent)
+        trainer.fit(model,datamodule=datamodule)
+        if save_model_bool:
+            save_model(model,model_directory,model_path)
+
+    else:
+        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model.load_state_dict(torch.load(checkpoint_path))
+        trainer = Trainer(max_epochs = max_epochs)
+        datamodule = RSU_Intersection_Datamodule(simulation_agent)
+        trainer.fit(model,datamodule=datamodule)
+        if save_model_bool:
+            save_model(model,model_directory,model_path)
