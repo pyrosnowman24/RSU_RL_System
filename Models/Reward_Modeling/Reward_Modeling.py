@@ -50,9 +50,6 @@ class RW_System(LightningModule):
                  agent,
                  num_features: int = 4,
                  nhead: int = 4,
-                 batch_size: int = 100,
-                 max_num_rsu: int = 20,
-                 episodes_per_epoch: int = 200,
                  W: int = [.5,.5],
                  n_layers: int = 1,
                  lr = 1e-4,
@@ -65,9 +62,6 @@ class RW_System(LightningModule):
         self.nhead = nhead
         self.lr = lr
 
-        self.max_num_rsu = max_num_rsu
-        self.episodes_per_epoch = episodes_per_epoch
-        self.batch_size = batch_size
         self.W = W
         self.n_layers = n_layers
 
@@ -147,9 +141,8 @@ class RW_System(LightningModule):
             batch (list): The batch of intersections, intersection idx, rsu idx, and mask
 
         Returns:
-            loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
+            loss (torch.Tensor): The loss of the solution for the Reward RL algorithm. The higher the loss, the worse the solution. 
         """
-
         return nn.MSELoss(reduction = 'mean')(rewards,rewards_critic)
 
     def save_data(self):
@@ -167,7 +160,7 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = True
+    save_model_bool = False
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)

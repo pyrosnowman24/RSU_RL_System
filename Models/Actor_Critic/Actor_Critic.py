@@ -1,3 +1,4 @@
+from cmath import isnan
 from typing import List, Tuple, Callable, Iterator
 
 import torch
@@ -35,13 +36,13 @@ class Decoder(nn.Module):
 class Attention(nn.Module):
     """Calculates attention over the input nodes given the current state."""
 
-    def __init__(self, hidden_size, device):
+    def __init__(self, hidden_size):
         super(Attention, self).__init__()
 
         # W processes features from static decoder elements
-        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), device=device, requires_grad=True))
+        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), requires_grad=True))
 
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), device=device, requires_grad=True))
+        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), requires_grad=True))
 
     def forward(self, static_hidden, decoder_hidden):
 
@@ -58,54 +59,80 @@ class Attention(nn.Module):
         attns = F.softmax(attns, dim=2)  # (batch, seq_len)
         return attns
 
-class Pointer(nn.Module):
-    """Calculates the next state given the previous state and input embeddings."""
+class PointerNetwork(nn.Module):
+    """
+    From "Pointer Networks" by Vinyals et al. (2017)
+    Adapted from pointer-networks-pytorch by ast0414:
+    https://github.com/ast0414/pointer-networks-pytorch
+    Args:
+    n_hidden: The number of features to expect in the inputs.
+    """
 
-    def __init__(self, hidden_size, device, num_layers=1, dropout=0.2):
-        super(Pointer, self).__init__()
+    def __init__(self, n_hidden: int):
+        super().__init__()
+        self.n_hidden = n_hidden
+        self.w1 = nn.Linear(n_hidden, n_hidden, bias=False)
+        self.w2 = nn.Linear(n_hidden, n_hidden, bias=False)
+        self.v = nn.Linear(n_hidden, 1, bias=False)
 
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+    def forward(self,
+        x_decoder: torch.Tensor,
+        x_encoder: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x_decoder: Encoding over the output tokens.
+            x_encoder: Encoding over the input tokens.
+        Shape:
+            x_decoder: (B, Ne, C)
+            x_encoder: (B, Nd, C)
+        """
 
-        # Used to calculate probability of selecting next state
-        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), device=device, requires_grad=True))
+        # print("\n x encoded shape",x_encoder.shape)
+        # print("x encoded",x_encoder)
+        # print("x decoder shape",x_decoder.shape)
+        # print("x decoder",x_decoder)
 
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), device=device, requires_grad=True))
+        # (B, Nd, Ne, C) <- (B, Ne, C)
+        encoder_transform = self.w1(x_encoder).unsqueeze(1).expand(
+            -1, x_decoder.shape[1], -1, -1)
+        # print("encoder transform output",encoder_transform.shape)
+        # print("encoder transform",encoder_transform)
 
-        # Used to compute a representation of the current decoder output
-        self.gru = nn.GRU(hidden_size, hidden_size, num_layers,
-                          batch_first=True,
-                          dropout=dropout if num_layers > 1 else 0)
-        self.encoder_attn = Attention(hidden_size, device)
+        # (B, Nd, 1, C) <- (B, Nd, C)
+        decoder_transform = self.w2(x_decoder).unsqueeze(2)
+        # print("decoder transform shape",decoder_transform.shape)
+        # print("decoder transform",decoder_transform)
 
-        self.drop_rnn = nn.Dropout(p=dropout)
-        self.drop_hh = nn.Dropout(p=dropout)
+        # (B, Nd, Ne) <- (B, Nd, Ne, C), (B, Nd, 1, C)
+        prod = self.v(torch.relu(encoder_transform + decoder_transform)).squeeze(-1)
+        # print("pointer output",prod.shape)
+        # print("pointer output",prod)
 
-    def forward(self, static_hidden, decoder_hidden, last_hh):
+        # (B, Nd, Ne) <- (B, Nd, Ne)
+        log_score = self.log_softmax(x = prod, dim=-1)
 
-        rnn_out, last_hh = self.gru(decoder_hidden.transpose(2, 1), last_hh)
-        rnn_out = rnn_out.squeeze(1)
+        # print("Log score shape", log_score.shape)
+        # print("Log score",log_score,'\n')
 
-        # Always apply dropout on the RNN output
-        rnn_out = self.drop_rnn(rnn_out)
-        if self.num_layers == 1:
-            # If > 1 layer dropout is already applied
-            current_hh = self.drop_hh(last_hh) 
+        return log_score
 
-        # Given a summary of the output, find an  input context
-        enc_attn = self.encoder_attn(static_hidden, rnn_out)
-        context = enc_attn.bmm(static_hidden.permute(0, 2, 1))  # (B, 1, num_feats)
+    def log_softmax(self,
+        x: torch.Tensor,
+        dim: int = -1,
+        ) -> torch.Tensor:
+        """
+        Apply softmax to x with masking.
 
-        # Calculate the next output using Batch-matrix-multiply ops
-        context = context.transpose(1, 2).expand_as(static_hidden)
-        energy = torch.cat((static_hidden, context), dim=1)  # (B, num_feats, seq_len)
+        Adapted from allennlp by allenai:
+            https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py
 
-        v = self.v.expand(static_hidden.size(0), -1, -1)
-        W = self.W.expand(static_hidden.size(0), -1, -1)
-
-        probs = torch.bmm(v, torch.tanh(torch.bmm(W, energy))).squeeze(1)
-
-        return probs, current_hh
+        Args:
+            x - Tensor of arbitrary shape to apply softmax over.
+            dim - Dimension over which to apply operation.
+        Outputs:
+            Tensor with same dimensions as x.
+        """
+        return torch.nn.functional.log_softmax(x, dim=dim)
 
 class Actor(nn.Module):
     def __init__(self,num_features = 3,
@@ -118,33 +145,49 @@ class Actor(nn.Module):
         self.embedding = Embedding(num_features,c_embed)
         self.encoder = Encoder(c_embed,nhead,n_layers)
         self.decoder = Decoder(c_embed,nhead,n_layers)
-        self.pointer = Pointer(c_embed)
+        self.pointer = PointerNetwork(c_embed)
         self.W = W
 
     def forward(self,intersections,mask):
+        # print("intersections",intersections)
+        # print("mask",mask)
         # print("Input shape",intersections.shape)
 
+        # print("Embedding:\n")
+        # for p in self.embedding.parameters():
+        #     if p.requires_grad:
+        #         print(p)
+        # print("Encoder:\n")
+        # for p in self.encoder.parameters():
+        #     if p.requires_grad:
+        #         print(p)
+        # print("Decoder:\n")
+        # for p in self.decoder.parameters():
+        #     if p.requires_grad:
+        #         print(p)
+
         embedded_state = self.embedding(intersections)
-        # print("embedded_state",embedded_state.shape)
+        # print("embedded_state",embedded_state)
 
         encoder_state = self.encoder(embedded_state)
-        # print("encoder_state",encoder_state.shape)
+        # print("encoder_state",encoder_state)
 
         decoder_input = encoder_state[:,:1,:]
-        # print("decoder input shape",decoder_input.shape)
+        # print("decoder input",decoder_input)
+
+        if np.isnan(decoder_input.detach().numpy().sum()): quit()
 
         q_values = []
         masked_argmaxs = []
         for i in range(intersections.shape[1]):
-            if i == 0: mask[:,0] = False
+            if i <= 1: mask[:,0] = False
             decoder_state = self.decoder(decoder_input,encoder_state)
-            # print("decoder_state",decoder_state.shape)
+            # print("decoder_state",decoder_state)
 
             q_value = self.pointer(decoder_state,encoder_state)
-            # print("Pointer output shape",q_value.shape)
+            # print("Pointer output",q_value)
             _, masked_argmax = self.masked_max(q_value,mask, dim=-1)
             # print("masked argmax",masked_argmax)
-
             q_values.append(q_value[:, -1, :])
             new_maxes = masked_argmax[:, -1]
             # print(mask)
@@ -156,9 +199,9 @@ class Actor(nn.Module):
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)
             # print('\n')
-            if (~mask).all():
+            if ~mask[1:].all():
                 break
-
+        
             next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(intersections.shape[0], -1, self.c_embed)
             decoder_input = torch.cat((encoder_state[:,:1,:], torch.gather(encoder_state, dim=1, index=next_indices)), dim=1)
 
@@ -166,7 +209,36 @@ class Actor(nn.Module):
         masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
         # print(masked_argmax)
         # quit()
-        return q_values, masked_argmaxs, mask
+        return q_values, masked_argmaxs
+    
+    def masked_max(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+        dim: int,
+        keepdim: bool = False
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply max to x with masking.
+
+        Adapted from allennlp by allenai:
+            https://github.com/allenai/allennlp/blob/master/allennlp/nn/util.py
+
+        Args:
+            x - Tensor of arbitrary shape to apply max over.
+            mask - Binary mask of same shape as x where "False" indicates elements
+            to disregard from operation.
+            dim - Dimension over which to apply operation.
+            keepdim - If True, keeps dimension dim after operation.
+        Outputs:
+            A ``torch.Tensor`` of including the maximum values.
+        """
+        x_replaced = x.masked_fill(~mask, -3e37)
+        # print(x_replaced)
+        max_value, max_index = x_replaced.max(dim=dim, keepdim=keepdim)
+        # print(max_value)
+        # print(max_index)
+        return max_value, max_index
 
 class Critic(nn.Module):
     def __init__(self,num_features = 3,
@@ -189,9 +261,9 @@ class Critic(nn.Module):
         for sample in embedded_state:
             reward = self.network(sample)
             rewards.append(reward)
-        rewards = torch.stack(rewards,dim=1)
+        rewards = torch.stack(rewards,dim=0)
 
-        return rewards
+        return rewards[:,:,0]
 
 class Actor_Critic(nn.Module):
     def __init__(self, num_features: int,
@@ -204,13 +276,12 @@ class Actor_Critic(nn.Module):
     
     def forward(self,intersections: torch.Tensor,
                      mask: torch.Tensor):
-        
         log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
-        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
-        rsu_network = intersections[rsu_idx,:]
+        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]
+        rsu_network = intersections[:,pointer_argmaxs[0,:],:]
         critic_reward = self.critic(rsu_network)
 
-        return log_pointer_scores, pointer_argmaxs, rsu_network, critic_reward
+        return log_pointer_scores, pointer_argmaxs, rsu_idx, critic_reward
 
     def reset(self) -> None:
         self.previous_action = None

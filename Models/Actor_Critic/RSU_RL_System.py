@@ -1,3 +1,5 @@
+from cmath import isnan
+from ctypes import pointer
 from json import encoder
 from tkinter import Variable
 from typing import List, Tuple, Callable, Iterator
@@ -6,6 +8,7 @@ import sys
 import os
 
 import torch
+import pandas as pd
 from torch import Tensor, nn
 from torch.optim import Adam, Optimizer
 from torch.utils.data import DataLoader
@@ -27,6 +30,8 @@ from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 import numpy as np
 import argparse
 
+np.set_printoptions(suppress=True)
+
 # This is a advantage actor-critic model
 
 
@@ -47,39 +52,78 @@ class DRL_System(LightningModule):
     def __init__(self, 
                      agent,
                      num_features: int = 4,
+                     nhead: int = 4,
                      num_layers: int = 1, 
-                     actor_lr: float = 5e-4,
-                     critic_lr: float = 5e-4, 
-                     W: int = [.5,.5]):
+                     lr: float = 5e-4,
+                     W: int = [.5,.5],
+                     model_directory = "/home/acelab/",
+                     save_data_bool:bool = False,
+                     use_sim: bool = True,
+                     rsu_performance_df = None
+                     ):
 
         super(DRL_System,self).__init__()
+        self.agent = agent
+        self.nhead = nhead
         self.num_layers = num_layers
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
+        self.lr = lr
         self.W = W
 
-        self.actor_critic = Actor_Critic(self.actor, self.critic, self.agent, self.device)
+        self.actor_critic = Actor_Critic(num_features, nhead, self.W, self.num_layers)
+        
+        pd.options.display.float_format = '{:.4f}'.format
+        # self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
+        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
+        self.df_new_data = self.df_history.copy()
+        self.model_directory = model_directory
+        self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
+        self.save_data_bool = save_data_bool
+        self.use_sim = use_sim
+        self.rsu_performance_df = rsu_performance_df
 
-        self.episode_states = np.empty((0,self.agent.state.shape[1]))
-        self.episode_actions = np.empty((0,self.agent.state.shape[1]))
-        self.episode_logp = np.empty((0,1))
-        self.episode_adv = []
-        self.episode_rewards = []
-        self.episode_critic_rewards = []
+    def forward(self,intersections: Tensor, mask: Tensor) -> Tensor:
+        _, _, rsu_network, critic_reward = self.actor_critic(intersections, mask)
+        return rsu_network, critic_reward
 
-        self.batch_states = []
-        self.batch_actions = []
-        self.batch_logp = []
-        self.batch_adv = []
+    def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx) -> OrderedDict:
+        intersections = batch[0]
+        intersection_idx = batch[1]
+        rsu_network_idx = batch[2]
+        mask = batch[3]
+        # intersections = intersections[:,mask[0,:],:]
 
-        self.epoch_rewards = []
+        log_pointer_scores, pointer_argmaxs, rsu_idx, critic_reward = self.actor_critic(intersections[:,:,1:],mask)
 
-        self.avg_rewards = 0
-        self.avg_ep_rewards = 0
+        # This is what I need to fix tomorrow
+        if self.use_sim:
+            rewards, features = self.agent.simulation_step(rsu_idx,intersection_idx[0],model = "Q Learning Positive")
+            rewards = torch.tensor([np.array(rewards)],requires_grad=True,dtype=torch.float)
+        else:
+            rsu_intersections = intersections[0,rsu_idx,:].detach().numpy()
+            rewards = np.empty(shape=(1,rsu_intersections.shape[0]))
 
-        _ = self.agent.reset()
+            for i,intersection in enumerate(rsu_intersections):
+                info = self.rsu_performance_df[int(intersection[0]) == self.rsu_performance_df[:,0].astype(int)]
+                rewards[:,i] = info[0,-1]
+            rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
 
-    def calculate_advantage(self,rewards,critic_ests):
+        padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
+        # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
+        padded_rewards[pointer_argmaxs[0,:] != 0] = torch.tensor(rewards.clone().detach(),dtype=torch.float)
+
+        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, rsu_idx, padded_rewards, critic_reward)
+
+        print("loss",loss)
+
+        # data = np.array((intersections.detach().numpy(),rsu_idx,features,rewards.detach().numpy(), critic_reward.detach().numpy(), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
+        data = np.array((intersections.detach().numpy(),rsu_idx,np.around(padded_rewards.detach().numpy(),4), np.around(critic_reward.detach().numpy(),4), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
+        self.df_history.loc[self.df_history.shape[0]] = data
+        self.df_new_data.loc[0] = data
+        if self.save_data_bool:
+            self.save_data()
+        return loss
+
+    def entropy(self,log_prob):
         """Function to calculate the losses for the actor and critic.
 
         Args:
@@ -89,41 +133,45 @@ class DRL_System(LightningModule):
         Returns:
             _type_: _description_
         """
-        advantage = [(rewards[i] - critic_ests[i])[0][0] for i in range(len(rewards))]
-        return advantage
+        entropy = -log_prob.exp() * log_prob
+        entropy = entropy.sum(1).mean()
+        return entropy
 
-    def actor_loss(self,advantage,logps) -> torch.Tensor:
-        actor_loss = torch.mean(torch.mul(advantage.detach(),torch.sum(logps)))
-        actor_loss.requires_grad = True
-        return actor_loss
+    def actor_loss(self,log_prob,pointer_argmaxs,advs) -> torch.Tensor:
+        """Calculates the loss for the Policy Gradient RL algorithm. The loss only takes into account the RSUs selected by 
+        the algorithm, not the RSUs that were already in the environment. This is because the log probability of 1 
+        (the RSUs are guarenteed to be present) is 0, so they wouldnt have an effect.
 
-    def critic_loss(self,advantage) -> torch.Tensor:
-        critic_loss = torch.mean(torch.pow(advantage.detach(),2))
-        critic_loss.requires_grad = True
-        return critic_loss
+        Args:
+            log_prob (torch.Tensor): The log probability of selecting each intersection for each step.
+            rsu_idx (torch.Tensor): The index of the selected RSU locations from the intersections.
+            rewards (torch.Tensor): The reward for each RSU in the network.
 
-    def forward(self,intersections: Tensor, mask: Tensor) -> Tensor:
-        _, _, rsu_network, critic_reward = self.actor_critic(intersections, mask)
-        return rsu_network, critic_reward
+        Returns:
+            loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
+        """
 
-    def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx,optimizer_idx) -> OrderedDict:
-        states, actions, logps, advantages = batch
-        # advantages = (advantages - advantages.mean())/advantages.std()
-        print(states.shape,'\n', actions.shape,'\n', logps.shape,'\n', advantages.shape,'\n') # Shape is (Batch_size,size of RSU network, number of intersections)
-        self.log("avg_ep_reward", self.avg_ep_rewards, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("avg_reward", self.avg_rewards, prog_bar=True, on_step=False, on_epoch=True)
+        log_prob_actions = log_prob[0,range(log_prob.shape[1]),pointer_argmaxs]
+        log_prob_actions = -(advs * log_prob_actions)
+        log_prob_actions = torch.nan_to_num(log_prob_actions,0.0)
+        log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
+        loss = log_prob_actions.nanmean()
 
-        if optimizer_idx == 0: 
-            loss_actor = self.actor_loss(advantages,logps)
-            self.log('loss_actor', loss_actor, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            # print('\n',"Loss Actor",loss_actor)
-            return loss_actor
+        return loss
 
-        if optimizer_idx == 1: 
-            loss_critic = self.critic_loss(advantages)
-            self.log('loss_critic', loss_critic, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            # print("Loss critic",loss_critic,'\n')
-            return loss_critic
+    def critic_loss(self,rewards, critic_rewards) -> torch.Tensor:
+        return nn.MSELoss(reduction = 'mean')(rewards,critic_rewards)
+
+    def loss(self,log_prob, pointer_argmaxs, rsu_idx, rewards, critic_rewards):
+        with torch.no_grad():
+            advs = rewards - critic_rewards * rewards.std() + rewards.mean()
+            advs = (advs - advs.mean()) / advs.std()
+            targets = (rewards - rewards.mean()) / rewards.std()
+        entropy = self.entropy(log_prob)
+        actor_loss = self.actor_loss(log_prob, pointer_argmaxs, advs)
+        critic_loss = self.critic_loss(targets, critic_rewards)
+
+        return actor_loss + critic_loss - entropy, entropy, actor_loss, critic_loss
      
     def configure_optimizers(self) -> List[Optimizer]:
         """Initializes Adam optimizers for actor and critic.
@@ -131,112 +179,35 @@ class DRL_System(LightningModule):
         Returns:
             List[Optimizer]: Optimizers for actor and critic.
         """
-        actor_optim = Adam(self.actor.parameters(), lr=self.actor_lr)
-        critic_optim = Adam(self.critic.parameters(), lr=self.critic_lr)
-        return actor_optim, critic_optim
+        optimizer = Adam(self.actor_critic.parameters(), lr=self.lr)
+        return optimizer
 
-    def train_batch(self,) -> Tuple[List[Tensor], List[Tensor], List[Tensor]]:
-        """Contains the logic for generating a new batch of data to be passed to the DataLoader.
-        Returns:
-            yields a tuple of Lists containing tensors for states, actions and rewards of the batch.
-        """
-        """
-        States: Mask of 0 and 1 determining which RSUs are selected for the RSU network, 0 is selected and 1 is not selected
-        Action: One cold mask determining which RSU is selected to be placed into RSU network
-        Logp: Log probability of selected RSU
-        Reward: reward from simulation for RSU network
-        Critic Reward: Estimation of the reward by the Critic
-        Next State: np.bitwise_and of States and Action (Adds selected RSU to mask of RSU network)
-        """
-        for episode in range(self.episodes_per_epoch):
-            terminate_simulation = False # Tests if the episode should end
-            epoch_end = False # Tests if the epoch should end
-            while not terminate_simulation:
-                self.episode_states = np.vstack((self.episode_states,self.agent.state.numpy()[0]))
-                action, logp, critic_reward = self.actor_critic(self.agent.state[None,:,:]) 
-                
-                _, reward, simulation_done = self.agent.simulation_step(action,self.W)
-                
-                self.episode_logp = np.vstack((self.episode_logp,logp.detach().numpy()[0][0]))
-
-                self.episode_actions = np.vstack((self.episode_actions, action.detach().numpy()))
-
-                self.episode_rewards.append(reward)
-                self.episode_critic_rewards.append(critic_reward.detach().numpy())
-
-                # Tests if all the samples for the batch are generated
-                # Tests if the max number of RSUs have been selected or all intersections have been selected
-                terminate_simulation = (self.agent.state.shape[1] - torch.sum(self.agent.state)) == self.max_num_rsu or torch.sum(self.agent.state) == 0.0
-                epoch_end = episode == self.episodes_per_epoch-1
-
-                if simulation_done or terminate_simulation:
-
-                    _ = self.agent.reset()
-                    self.actor_critic.reset()
-
-                    self.epoch_rewards.append(np.sum(self.episode_rewards))
-                    self.episode_adv = np.array(self.calculate_advantage(self.episode_rewards,self.episode_critic_rewards),ndmin=2).transpose()
-
-                    self.batch_states.append(torch.from_numpy(self.episode_states))
-                    self.batch_actions.append(torch.from_numpy(self.episode_actions))
-                    self.batch_logp.append(torch.from_numpy(self.episode_logp))
-                    self.batch_adv.append(torch.from_numpy(self.episode_adv))
-                        
-                    self.episode_states = np.empty((0,self.agent.state.shape[1]))
-                    self.episode_actions = np.empty((0,self.agent.state.shape[1]))
-                    self.episode_logp = np.empty((0,1))
-                    self.episode_adv = []
-                    self.episode_rewards = []
-                    self.episode_critic_rewards = []
-            if epoch_end:
-                # Yield training data for model
-                # print(self.batch_states,'\n', self.batch_actions,'\n',self.batch_logp,'\n',self.batch_adv,'\n')
-                train_data = zip(self.batch_states, self.batch_actions,self.batch_logp,self.batch_adv)
-                for state, action, logp, advantages in train_data:
-                    print(state,'\n', action,'\n', logp,'\n', advantages,'\n')
-                    yield state, action, logp, advantages
-
-                # Reset history for next epoch
-                self.batch_states.clear()
-                self.batch_actions.clear()
-                self.batch_logp.clear()
-                self.batch_adv.clear()
-
-            # Logging
-            self.avg_rewards = sum(self.epoch_rewards) / self.episodes_per_epoch
-
-            total_epoch_reward = np.sum(self.epoch_rewards)
-            nb_episodes = len(self.epoch_rewards)
-            self.avg_ep_rewards = total_epoch_reward / nb_episodes
-
-            self.epoch_rewards = []
-
-    def _dataloader(self) -> DataLoader:
-        """Initialize the Replay Buffer dataset used for retrieving experiences."""
-        dataset = ExperienceSourceDataset(self.train_batch)
-        dataloader = DataLoader(dataset=dataset, batch_size=self.batch_size)
-        return dataloader
-
-    def train_dataloader(self) -> DataLoader:
-        """Get train loader."""
-        return self._dataloader()
+    def save_data(self):
+        print("Saving Data")
+        if not os.path.isfile(self.model_history_file):
+            self.df_new_data.to_csv(self.model_history_file, index=False)
+        else: # else it exists so append without writing the header
+            self.df_new_data.to_csv(self.model_history_file, index=False, mode='a', header=False)
 
 def save_model(model,model_directory,model_path):
         model_history_file = os.path.join(model_directory,"model_history.csv")
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 25
+    max_epochs = 100
     train_new_model = True
-    save_model_bool = False
+    save_model_bool = True
     display_figures = True
+    use_sim = False
 
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "Training_for_Reward"
+    model_name = "adv_AC_entropy"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
+    
+    rsu_performance_df = pd.read_csv("/home/acelab/Dissertation/RSU_RL_Placement/rsu_performance_dataset").to_numpy()
 
     checkpoint_name = "Training_for_Reward"
     checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
@@ -244,9 +215,11 @@ if __name__ == '__main__':
 
     if save_model_bool:
             os.makedirs(model_directory)
+            f = open(os.path.join(model_directory,"output.txt"),'w')
+            sys.stdout = f
     if train_new_model:
         simulation_agent = Agent()
-        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool, use_sim = use_sim, rsu_performance_df = rsu_performance_df)
         trainer = Trainer(max_epochs = max_epochs)
         datamodule = RSU_Intersection_Datamodule(simulation_agent)
         trainer.fit(model,datamodule=datamodule)

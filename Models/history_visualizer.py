@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import os, re
 
 directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-model_name = "Random_RSU_Network"
+model_name = "adv_AC_entropy"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
@@ -17,32 +17,53 @@ rsu_history = history_df['rsu_network']
 intersections_history = history_df['intersection_idx']
 reward_history = history_df['reward']
 critic_reward_history = history_df['critic_reward']
-loss_history = history_df['loss']
 avg_rsu = 0
 
-# for rsu_network in rsu_history:
-#     results = re.findall(r"\d+",rsu_network)
-#     avg_rsu += len(results)
-#     avg_rsu /= 2
+for rsu_network in rsu_history:
+    results = re.findall(r"\d+",rsu_network)
+    avg_rsu += len(results)
+    avg_rsu /= 2
 # print(avg_rsu)
 
-# loss = history_df['loss']
+loss = history_df['loss'].to_numpy()
+critic_loss = history_df['critic_loss'].to_numpy()
+actor_loss = history_df['actor_loss'].to_numpy()
+entropy = history_df['entropy'].to_numpy()
 
-# # loss = loss.mask(loss > loss.quantile(0.90)) # Removes outlies from loss, some are >10,000 when most are ~200 - 1000
+x = np.arange(0,len(actor_loss)+1,step = 100)
+average_actor = []
+for i in range(len(x)-1):
+    average_actor.append(np.nanmean(actor_loss[x[i]:x[i+1]]))
 
-# loss = loss.to_numpy()
+average_critic = []
+for i in range(len(x)-1):
+    average_critic.append(np.nanmean(critic_loss[x[i]:x[i+1]]))
 
-# x = np.arange(0,len(loss)+1,step = 100)
-# average = []
+average_loss = []
+for i in range(len(x)-1):
+    average_loss.append(np.nanmean(loss[x[i]:x[i+1]]))
 
-# for i in range(len(x)-1):
-#     average.append(np.nanmean(loss[x[i]:x[i+1]]))
-# print(average)
+average_entropy = []
+for i in range(len(x)-1):
+    average_entropy.append(np.nanmean(entropy[x[i]:x[i+1]]))
 
-# fig,ax = plt.subplots(1)
-# ax.plot(np.arange(len(loss)),loss)
-# ax.plot(x[1:],average)
-# plt.show()
+fig,(ax1,ax2,ax3,ax4) = plt.subplots(4)
+ax1.plot(np.arange(len(entropy)),entropy)
+ax1.plot(x[1:],average_entropy)
+ax1.set_ylabel("Loss")
+
+ax2.plot(np.arange(len(actor_loss)),actor_loss)
+ax2.plot(x[1:],average_actor)
+ax2.set_ylabel("Loss")
+
+ax3.plot(np.arange(len(critic_loss)),critic_loss)
+ax3.plot(x[1:],average_critic)
+ax3.set_ylabel("Loss")
+
+ax4.plot(np.arange(len(loss)),loss)
+ax4.plot(x[1:],average_loss)
+ax4.set_ylabel("Loss")
+plt.show()
 
 ############################################
 
@@ -59,7 +80,7 @@ avg_rsu = 0
 # fig = plt.figure()
 # ax = fig.add_subplot(projection='3d')
 
-# ax.scatter(len_intersections,len_rsu_net,loss_history)
+# ax.scatter(len_intersections,len_rsu_net,loss)
 # ax.set_xlabel("Number of Intersections")
 # ax.set_ylabel("Number of RSU")
 # ax.set_zlabel("Loss")
@@ -67,38 +88,25 @@ avg_rsu = 0
 
 ###################################
 
-reward = np.empty(shape = reward_history.shape,dtype=object)
-for i in range(reward.shape[0]):
-    results = re.findall(r'\d*\.?\d+',reward_history[i])
-    reward[i] = [float(x) for x in results]
+# reward = np.empty(shape = reward_history.shape,dtype=object)
+# for i in range(reward.shape[0]):
+#     results = re.findall(r'[-+]?\d*\.?\d+',reward_history[i])
+#     reward[i] = np.sum([float(x) for x in results])
 
 
-critic_reward = np.empty(shape = reward_history.shape,dtype=object)
-for i in range(critic_reward.shape[0]):
-    results = re.findall(r'\d*\.?\d+',critic_reward_history[i])
-    critic_reward[i] = [float(x) for x in results]
+# critic_reward = np.empty(shape = reward_history.shape,dtype=object)
+# for i in range(critic_reward.shape[0]):
+#     results = re.findall(r'[-+]?\d*\.?\d+',critic_reward_history[i])
+#     critic_reward[i] = np.sum([float(x) for x in results])
 
-mask = np.ones(shape = reward.shape[0])
-for i in range(reward.shape[0]):
-    diff = len(reward[i]) - len(critic_reward[i])
-    if diff != 0:
-        mask[i] = 0
+# # reward = np.concatenate(reward).ravel()
+# # critic_reward = np.concatenate(critic_reward).ravel()
 
-mask = mask.astype(bool)
+# error = np.multiply(reward,critic_reward)
 
-reward = reward[mask]
-critic_reward = critic_reward[mask]
+# x = np.arange(len(reward))
+# width = .35
 
-reward = np.concatenate(reward).ravel()
-critic_reward = np.concatenate(critic_reward).ravel()
-
-error = np.subtract(reward,critic_reward)
-
-x = np.arange(len(reward))
-width = .35
-
-fig, ax = plt.subplots()
-# rects1 = ax.bar(x - width/2,reward,width)
-# rects2 = ax.bar(x + width/2,critic_reward,width)
-ax.bar(x,error)
-plt.show()
+# fig, ax = plt.subplots()
+# ax.bar(x,error)
+# plt.show()

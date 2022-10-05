@@ -51,7 +51,7 @@ class Agent:
 
         try: subprocess.Popen("kill $(cat sumo-launchd.pid)",cwd=self.logs_dir,shell=True)
         except: pass
-        
+
         rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
         self.place_rsu_network(rsu_network)
         process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True) #Sumo
@@ -69,7 +69,7 @@ class Agent:
         if model == "Q Learning":
             reward = self.reward_ql(features,W)
         if model == "Q Learning Positive":
-            reward, features = self.reward_positive_ql(features,W)
+            reward, features = self.reward_positive_ql(features,sim_idx,W)
         else:
             reward = self.reward(features,W)
 
@@ -147,7 +147,7 @@ class Agent:
         # print(features)
         return features
 
-    def reward_positive_ql(self,features,W):
+    def reward_positive_ql(self,features,sim_idx,W):
         """Reward for Q-Learning based model. The higher the reward the better the solution. This version will always be positive.
 
         Args:
@@ -158,17 +158,20 @@ class Agent:
             int: Reward for all RSUs in RSU network
         """
         original_features = np.copy(features)
-        print(features)
+        # print(features)
         original_features[0] = np.nan_to_num(original_features[0],nan = -104)
         original_features[1] = np.nan_to_num(original_features[1],nan = 0)
         original_features[0] = (.017 * np.power(original_features[0,:]+104,2))/100
-        original_features[1] = (.00005 * np.power(original_features[1,:],2))/100
+        original_features[1] = (.0002 * np.power(original_features[1,:],2))/100
 
         # print("processed features",features)
 
         original_features = np.sum(original_features,axis=0)
-        for i in range(1,len(original_features)):
-            original_features[i] *= -.1*np.log(i+1)+1
+        
+        # for i in range(1,len(original_features)):
+        #     original_features[i] *= -.1*np.log(i+1)+1
+        # print(original_features)
+        
         return original_features, features
 
 

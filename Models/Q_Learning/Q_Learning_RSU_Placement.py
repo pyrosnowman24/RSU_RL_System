@@ -192,7 +192,7 @@ def save_model(model,model_directory,model_path):
 if __name__ == '__main__':
     max_epochs = 25
     train_new_model = True
-    save_model_bool = True
+    save_model_bool = False
     display_figures = True
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
