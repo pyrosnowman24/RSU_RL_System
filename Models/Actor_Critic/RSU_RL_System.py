@@ -14,6 +14,7 @@ from torch.optim import Adam, Optimizer
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.utils.data.dataset import IterableDataset
+from scipy import stats,special
 
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -32,22 +33,6 @@ import argparse
 
 np.set_printoptions(suppress=True)
 
-# This is a advantage actor-critic model
-
-
-class ExperienceSourceDataset(IterableDataset):
-    """Basic experience source dataset.
-    Takes a generate_batch function that returns an iterator. The logic for the experience source and how the batch is
-    generated is defined the Lightning model itself
-    """
-
-    def __init__(self, generate_batch: Callable) -> None:
-        self.generate_batch = generate_batch
-
-    def __iter__(self) -> Iterator:
-        iterator = self.generate_batch()
-        return iterator
-
 class DRL_System(LightningModule):
     def __init__(self, 
                      agent,
@@ -59,7 +44,8 @@ class DRL_System(LightningModule):
                      model_directory = "/home/acelab/",
                      save_data_bool:bool = False,
                      use_sim: bool = True,
-                     rsu_performance_df = None
+                     rsu_performance_df = None,
+                     lmbda: float = 0.09741166794923455
                      ):
 
         super(DRL_System,self).__init__()
@@ -80,6 +66,7 @@ class DRL_System(LightningModule):
         self.save_data_bool = save_data_bool
         self.use_sim = use_sim
         self.rsu_performance_df = rsu_performance_df
+        self.lmbda = lmbda
 
     def forward(self,intersections: Tensor, mask: Tensor) -> Tensor:
         _, _, rsu_network, critic_reward = self.actor_critic(intersections, mask)
@@ -103,6 +90,7 @@ class DRL_System(LightningModule):
             rewards = np.empty(shape=(1,rsu_intersections.shape[0]))
 
             for i,intersection in enumerate(rsu_intersections):
+                print(int(intersection[0]))
                 info = self.rsu_performance_df[int(intersection[0]) == self.rsu_performance_df[:,0].astype(int)]
                 rewards[:,i] = info[0,-1]
             rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
@@ -116,7 +104,8 @@ class DRL_System(LightningModule):
         print("loss",loss)
 
         # data = np.array((intersections.detach().numpy(),rsu_idx,features,rewards.detach().numpy(), critic_reward.detach().numpy(), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
-        data = np.array((intersections.detach().numpy(),rsu_idx,np.around(padded_rewards.detach().numpy(),4), np.around(critic_reward.detach().numpy(),4), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
+        inv_boxcox_critic_rewards = special.inv_boxcox(critic_reward.detach().numpy(),self.lmbda)
+        data = np.array((intersections.detach().numpy(),rsu_idx,np.around(padded_rewards.detach().numpy(),4), np.around(inv_boxcox_critic_rewards,4), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -160,16 +149,19 @@ class DRL_System(LightningModule):
         return loss
 
     def critic_loss(self,rewards, critic_rewards) -> torch.Tensor:
-        return nn.MSELoss(reduction = 'mean')(rewards,critic_rewards)
+        boxcox_rewards = stats.boxcox(rewards.detach().numpy(),lmbda=self.lmbda)
+        boxcox_rewards = boxcox_rewards[None,:]
+        boxcox_rewards = torch.tensor(boxcox_rewards,requires_grad=True)
+        return nn.MSELoss(reduction = 'mean')(boxcox_rewards,critic_rewards)
 
     def loss(self,log_prob, pointer_argmaxs, rsu_idx, rewards, critic_rewards):
-        with torch.no_grad():
-            advs = rewards - critic_rewards * rewards.std() + rewards.mean()
-            advs = (advs - advs.mean()) / advs.std()
-            targets = (rewards - rewards.mean()) / rewards.std()
+        # with torch.no_grad():
+        #     advs = rewards - critic_rewards * rewards.std() + rewards.mean()
+            # advs = (advs - advs.mean()) / advs.std()
+            # targets = (rewards - rewards.mean()) / rewards.std()
         entropy = self.entropy(log_prob)
-        actor_loss = self.actor_loss(log_prob, pointer_argmaxs, advs)
-        critic_loss = self.critic_loss(targets, critic_rewards)
+        actor_loss = self.actor_loss(log_prob, pointer_argmaxs, rewards)
+        critic_loss = self.critic_loss(rewards, critic_rewards)
 
         return actor_loss + critic_loss - entropy, entropy, actor_loss, critic_loss
      
@@ -203,7 +195,7 @@ if __name__ == '__main__':
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "adv_AC_entropy"
+    model_name = "100_epoch_corrected_skew"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     
@@ -229,7 +221,7 @@ if __name__ == '__main__':
     else:
         model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
         model.load_state_dict(torch.load(checkpoint_path))
-        trainer = Trainer(max_epochs = max_epochs)
+        trainer = Trainer(max_epochs = max_epochs,gradient_clip_value = 0.5)
         datamodule = RSU_Intersection_Datamodule(simulation_agent)
         trainer.fit(model,datamodule=datamodule)
         if save_model_bool:

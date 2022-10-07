@@ -113,12 +113,11 @@ class Actor(nn.Module):
     def __init__(self,num_features = 3,
                       nhead = 4,
                       W = [.5,.5],
-                      c_inputs = 3,
                       c_embed = 16,
                       n_layers = 1):
         super(Actor,self).__init__()
         self.c_embed = c_embed
-        self.embedding = Embedding(c_inputs,c_embed)
+        self.embedding = Embedding(nhead,c_embed)
         self.encoder = Encoder(c_embed,nhead,n_layers)
         self.decoder = Decoder(c_embed,nhead,n_layers)
         self.pointer = PointerNetwork(c_embed)
@@ -139,6 +138,7 @@ class Actor(nn.Module):
         log_pointer_scores = []
         masked_argmaxs = []
         for i in range(intersections.shape[1]):
+            if i <= 1: mask[:,0] = False
             decoder_state = self.decoder(decoder_input,encoder_state)
             # print("decoder_state",decoder_state.shape)
 

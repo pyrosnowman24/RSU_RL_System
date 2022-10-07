@@ -21,6 +21,7 @@ import sys
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy import stats, special
 
 currentdir = os.path.dirname(os.path.realpath(__file__))
 parentdir = os.path.dirname(currentdir)
@@ -33,6 +34,7 @@ from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
 directory_path = os.getcwd()
 model_name = "rsu_performance_dataset"
 model_directory = os.path.join(directory_path,model_name)
+df = pd.read_csv(model_directory)
 
 
 def create_new_performance_model():
@@ -66,13 +68,19 @@ def create_new_performance_model():
     df_data.to_csv(model_directory, index=False)
 
 def plot_performance_model():
-    df = pd.read_csv(model_directory)
     rewards = df['reward'].to_numpy()
     x = df['x'].to_numpy()
     y = df['y'].to_numpy()
-    # fig,ax = plt.subplots(1)
-    # ax.scatter(np.arange(rewards_filtered.shape[0]),rewards_filtered)
-    # plt.show()
+    size = df['size'].to_numpy()
+    fig,ax = plt.subplots(1)
+    ax.scatter(np.arange(rewards.shape[0]),rewards)
+    plt.show()
+
+def plot_rewards_xy():
+    rewards = df['reward'].to_numpy()
+    x = df['x'].to_numpy()
+    y = df['y'].to_numpy()
+    size = df['size'].to_numpy()
 
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
@@ -83,5 +91,33 @@ def plot_performance_model():
     ax.set_zlabel("reward")
     plt.show()
 
+    fig,ax=plt.subplots(1)
+    ax.scatter(size,rewards)
+    ax.set_xlabel("# Roads Connected to Intersection")
+    ax.set_ylabel("Reward")
+    ax.set_title("# Roads Connected to Intersection vs. Reward")
+    plt.show()
 
-create_new_performance_model()
+    fig,ax = plt.subplots(1)
+    ax.hist(np.log(rewards+1e-8))
+    plt.show()
+
+def plot_reward_skews():
+    lmbda = 0.09741166794923455 # Variable determined by algorithm originally based on sampled rewards from entire data.
+    reward_log = np.log(df['reward']+1e-8)
+    reward_sqrt = np.sqrt(df['reward'])
+    reward_boxcox = stats.boxcox(df['reward']+1e-8,lmbda=lmbda)
+    reward_boxcox = pd.Series(reward_boxcox)
+    print("Original skewness",df['reward'].skew())
+    print("Log Transform",reward_log.skew())
+    print("SQRT Transform",reward_sqrt.skew())
+    print("Box Cox Transform",reward_boxcox.skew())
+    
+    # fig,ax = plt.subplots(1)
+    # ax.hist(reward_boxcox)
+    # plt.show()
+    inv_boxcox = special.inv_boxcox(reward_boxcox,lmbda)
+    print(inv_boxcox.skew())
+
+
+plot_reward_skews()

@@ -47,13 +47,16 @@ class ExperienceSourceDataset(IterableDataset):
 class PG_System(LightningModule):
     def __init__(self,
                  agent,
-                 num_features: int = 3,
+                 num_features: int = 4,
                  nhead: int = 4,
                  W: int = [.5,.5],
                  n_layers: int = 1,
                  lr = 1e-4,
                  model_directory = "/home/acelab/",
-                 save_data_bool:bool = False):
+                 save_data_bool:bool = False,
+                 use_sim: bool = True,
+                 rsu_performance_df = None
+                 ):
 
         super(PG_System,self).__init__()
         
@@ -75,6 +78,8 @@ class PG_System(LightningModule):
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
+        self.use_sim = use_sim
+        self.rsu_performance_df = rsu_performance_df
 
         self.running_average = 0
 
@@ -86,35 +91,34 @@ class PG_System(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3]
-        print("intersection idx",intersection_idx)
-        print("og rsu idx",rsu_network_idx)
-        log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections,intersection_idx,rsu_network_idx,mask)
-        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]-1
-        print("rsu_idx ",rsu_idx)
-        if len(rsu_idx) != 0:
-            print("With RSU network")
-            reward = self.agent.simulation_step(rsu_idx,intersection_idx[0,1:],model = "Policy Gradient")
-            reward = torch.tensor([reward],requires_grad=True,dtype=torch.float)
-            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            # scaled_reward = reward - self.running_average
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
+
+        # print("intersection idx",intersection_idx)
+        # print("og rsu idx",rsu_network_idx)
+        log_pointer_scores, pointer_argmaxs = self.policy_gradient(intersections[:,:,1:],intersection_idx,rsu_network_idx,mask)
+        rsu_idx = pointer_argmaxs[pointer_argmaxs>0]
+        # print("rsu_idx ",rsu_idx)
+        # print("With RSU network")
+
+        if self.use_sim:
+            rewards, features = self.agent.simulation_step(rsu_idx,intersection_idx[0],model = "Q Learning Positive")
+            rewards = torch.tensor([np.array(rewards)],requires_grad=True,dtype=torch.float)
         else:
-            print("Without RSU network")
-            reward = torch.tensor([0.0],requires_grad=True,dtype=torch.float)
-            # self.running_average = (reward.detach().numpy().mean() + self.running_average)/2
-            # scaled_reward = reward - self.running_average
-            loss = self.loss(log_pointer_scores,pointer_argmaxs,reward)
-        print("reward",reward)
-        print("running average",self.running_average)
+            rsu_intersections = intersections[0,rsu_idx,:].detach().numpy()
+            rewards = np.empty(shape=(1,rsu_intersections.shape[0]))
+
+            for i,intersection in enumerate(rsu_intersections):
+                info = self.rsu_performance_df[int(intersection[0]) == self.rsu_performance_df[:,0].astype(int)]
+                rewards[:,i] = info[0,-1]
+            rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
+
+        padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
+        padded_rewards[pointer_argmaxs[0,:] != 0] = torch.tensor(rewards.clone().detach(),dtype=torch.float)
+        
+        loss = self.loss(log_pointer_scores,pointer_argmaxs,padded_rewards)
         # data = [intersections,intersection_idx,rsu_network_idx,rsu_idx,reward.detach().numpy(),loss.detach().numpy()]
-        print("rsu idx",rsu_idx)
-        print("loss",loss.detach().numpy())
-        data = [intersection_idx.numpy(),rsu_idx.numpy(),reward.detach().numpy(),loss.detach().numpy()]
-        print("data",data)
-        if self.df_new_data.shape[0] != 0: print(self.df_new_data.loc[0])
+        data = [intersection_idx.numpy(),rsu_idx.numpy(),rewards.detach().numpy(),loss.detach().numpy()]
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
-        print(self.df_new_data.loc[0])
         if self.save_data_bool:
             self.save_data()
         return loss
@@ -136,19 +140,16 @@ class PG_System(LightningModule):
         Returns:
             loss (torch.Tensor): The loss of the solution for the Policy Gradient RL algorithm. The higher the loss, the worse the solution. 
         """
-        padded_rewards = torch.zeros(rsu_idx.shape[1])
-        padded_rewards[rsu_idx[0,:] != 0] = rewards
+
         # print(-log_prob[0,range(log_prob.shape[1]),rsu_idx])
         # print(padded_rewards)
-        log_prob_actions = padded_rewards * -log_prob[0,range(log_prob.shape[1]),rsu_idx]
+        log_prob_actions = rewards * -log_prob[0,range(log_prob.shape[1]),rsu_idx]
         log_prob_actions = torch.nan_to_num(log_prob_actions,0.0)
         log_prob_actions = log_prob_actions[log_prob_actions!=0.0]
         # print(log_prob_actions)
         loss = log_prob_actions.nanmean()
         # print(loss)
 
-        if np.isnan(loss.detach().numpy()):
-            loss = torch.tensor(10000.0,requires_grad=True)
         return loss
 
     def save_data(self):
@@ -164,16 +165,20 @@ def save_model(model,model_directory,model_path):
 
 
 if __name__ == '__main__':
-    max_epochs = 1
+    max_epochs = 200
     train_new_model = True
     save_model_bool = True
     display_figures = True
+    use_sim = False
+
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "test"
+    model_name = "200_epoch_PG"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
+
+    rsu_performance_df = pd.read_csv("/home/acelab/Dissertation/RSU_RL_Placement/rsu_performance_dataset").to_numpy()
 
     checkpoint_name = "Training_for_Reward"
     checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
@@ -184,7 +189,7 @@ if __name__ == '__main__':
             os.makedirs(model_directory)
     if train_new_model:
         simulation_agent = Agent()
-        model = PG_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
+        model = PG_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool,use_sim=use_sim,rsu_performance_df=rsu_performance_df)
         trainer = Trainer(max_epochs = max_epochs)
         datamodule = RSU_Intersection_Datamodule(simulation_agent)
         trainer.fit(model,datamodule=datamodule)
