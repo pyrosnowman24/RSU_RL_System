@@ -33,32 +33,6 @@ class Decoder(nn.Module):
     def forward(self,rsu_intersections,encoder_state):
         return self.transformer(rsu_intersections,encoder_state)
 
-class Attention(nn.Module):
-    """Calculates attention over the input nodes given the current state."""
-
-    def __init__(self, hidden_size):
-        super(Attention, self).__init__()
-
-        # W processes features from static decoder elements
-        self.v = nn.Parameter(torch.zeros((1, 1, hidden_size), requires_grad=True))
-
-        self.W = nn.Parameter(torch.zeros((1, hidden_size, 2 * hidden_size), requires_grad=True))
-
-    def forward(self, static_hidden, decoder_hidden):
-
-        batch_size, hidden_size, _ = static_hidden.size()
-
-        hidden = decoder_hidden.unsqueeze(2).expand_as(static_hidden)
-        hidden = torch.cat((static_hidden, hidden), 1)
-
-        # Broadcast some dimensions so we can do batch-matrix-multiply
-        v = self.v.expand(batch_size, 1, hidden_size)
-        W = self.W.expand(batch_size, hidden_size, -1)
-
-        attns = torch.bmm(v, torch.tanh(torch.bmm(W, hidden)))
-        attns = F.softmax(attns, dim=2)  # (batch, seq_len)
-        return attns
-
 class PointerNetwork(nn.Module):
     """
     From "Pointer Networks" by Vinyals et al. (2017)
@@ -104,7 +78,10 @@ class PointerNetwork(nn.Module):
         # print("decoder transform",decoder_transform)
 
         # (B, Nd, Ne) <- (B, Nd, Ne, C), (B, Nd, 1, C)
+        # print(encoder_transform.shape)
+        # print(decoder_transform.shape)
         prod = self.v(torch.relu(encoder_transform + decoder_transform)).squeeze(-1)
+        # print(prod.shape)
         # print("pointer output",prod.shape)
         # print("pointer output",prod)
 
@@ -135,7 +112,7 @@ class PointerNetwork(nn.Module):
         return torch.nn.functional.log_softmax(x, dim=dim)
 
 class Actor(nn.Module):
-    def __init__(self,num_features = 3,
+    def __init__(self,num_features = 4,
                       nhead = 4,
                       W = [.5,.5],
                       c_embed = 16,
@@ -248,6 +225,10 @@ class Critic(nn.Module):
         self.network = nn.Sequential(nn.Linear(c_embed,16),
                                      nn.ReLU(),
                                      nn.Linear(16,32),
+                                     nn.ReLU(),
+                                     nn.Linear(32,64),
+                                     nn.ReLU(),
+                                     nn.Linear(64,32),
                                      nn.ReLU(),
                                      nn.Linear(32,16),
                                      nn.ReLU(),

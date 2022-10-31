@@ -22,6 +22,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats, special
+from sklearn.preprocessing import MinMaxScaler
 
 currentdir = os.path.dirname(os.path.realpath(__file__))
 parentdir = os.path.dirname(currentdir)
@@ -43,6 +44,7 @@ def create_new_performance_model():
     num_intersections = simulation_agent.network_intersections.shape[0]
 
     df_data = pd.DataFrame(columns=["intersection_id","x","y","z","size","feature","reward"],dtype=object)
+    print(df_data)
     step = 100
 
     for current in np.arange(num_intersections,step = step):
@@ -62,9 +64,8 @@ def create_new_performance_model():
                             features[:,i],
                             reward[i]),
                             dtype=object)
+            print(data)
             df_data.loc[len(df_data.index)] = data
-
-    print(model_directory)
     df_data.to_csv(model_directory, index=False)
 
 def plot_performance_model():
@@ -103,21 +104,53 @@ def plot_rewards_xy():
     plt.show()
 
 def plot_reward_skews():
-    lmbda = 0.09741166794923455 # Variable determined by algorithm originally based on sampled rewards from entire data.
-    reward_log = np.log(df['reward']+1e-8)
-    reward_sqrt = np.sqrt(df['reward'])
-    reward_boxcox = stats.boxcox(df['reward']+1e-8,lmbda=lmbda)
-    reward_boxcox = pd.Series(reward_boxcox)
-    print("Original skewness",df['reward'].skew())
-    print("Log Transform",reward_log.skew())
-    print("SQRT Transform",reward_sqrt.skew())
-    print("Box Cox Transform",reward_boxcox.skew())
-    
-    # fig,ax = plt.subplots(1)
-    # ax.hist(reward_boxcox)
-    # plt.show()
-    inv_boxcox = special.inv_boxcox(reward_boxcox,lmbda)
-    print(inv_boxcox.skew())
+    lmbda = 0.24098677879102673 # Variable determined by algorithm originally based on sampled rewards from entire data.
 
+    print("Original Skewness",df['reward'].skew())
+    print("Original Shapiro",stats.shapiro(df['reward'])[1])
+    print('\n')
+
+    reward_inv = 1/(df['reward']+1e-8)
+    print("Inv Transform",reward_inv.skew())
+    print("Inv Shapiro",stats.shapiro(reward_inv)[1])
+    print('\n')
+
+    reward_log = np.log(df['reward']+1e-8)
+    print("Log Transform",reward_log.skew())
+    print("Log Shapiro",stats.shapiro(reward_log)[1])
+    print('\n')
+
+    reward_sqrt = np.sqrt(df['reward'])
+    print("SQRT Transform",reward_sqrt.skew())
+    print("SQRT Shapiro",stats.shapiro(reward_sqrt)[1])
+    print('\n')
+
+    reward_boxcox,lmbda = stats.boxcox(df['reward']+1e-8)
+    reward_boxcox = pd.Series(reward_boxcox)
+    print("Box Cox Transform",reward_boxcox.skew())
+    print("Box Cox Shapiro",stats.shapiro(reward_boxcox)[1])
+    print('\n')
+
+    inv_boxcox = special.inv_boxcox(reward_boxcox,lmbda)
+    print("Inverse Box Cox Transform",inv_boxcox.skew())
+    
+    fig,ax = plt.subplots(1)
+    ax.hist(reward_sqrt)
+    plt.show()
+    
+
+def plot_xy_coords():
+    x = df['x'].to_numpy()
+    y = df['y'].to_numpy()
+    scaler = MinMaxScaler()
+    xy_scaled = scaler.fit_transform(df[['x','y']])
+    x_scaled = xy_scaled[:,0]
+    y_scaled = xy_scaled[:,1]
+
+    fig,(ax1,ax2) = plt.subplots(2)
+    ax1.scatter(x,y)
+    ax2.scatter(x_scaled,y_scaled)
+    plt.show()
+    
 
 plot_reward_skews()

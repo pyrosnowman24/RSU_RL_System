@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset,DataLoader,random_split
 import pytorch_lightning as pl
+from sklearn.preprocessing import MinMaxScaler
+
 
 class RSU_Intersection_Dataset(Dataset):
     def __init__(self,
@@ -44,8 +46,8 @@ class RSU_Intersection_Dataset(Dataset):
         rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
 
         intersections = self.agent.get_simulated_intersections(intersection_idx)
-
-        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
+        scaled_intersections = self.scale_intersections(intersections)
+        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(scaled_intersections, intersection_idx,rsu_network_idx)
 
         return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask
 
@@ -105,6 +107,12 @@ class RSU_Intersection_Dataset(Dataset):
             if bool(rsu_mask[i]) is True:
                 mask[rsu_network_idx[i]+1] = False
         return mask
+
+    def scale_intersections(self, intersections):
+        scaler = MinMaxScaler()
+        scaled_intersections = np.copy(intersections)
+        scaled_intersections[:,1:] = scaler.fit_transform(scaled_intersections[:,1:])
+        return scaled_intersections
 
 class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def __init__(self,

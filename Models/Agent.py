@@ -37,10 +37,10 @@ class Agent:
         self.sumo_launchd_file = os.path.join(self.sumo_scenario_dir,new_simulation_variables_db.loc["launchd_name"])
         playground_size = new_simulation_variables_db.loc[["playground_x","playground_y","playground_z"]].to_numpy()
         self.omnet_dimensions = new_simulation_variables_db.loc[["min_omnet_x","min_omnet_y","max_omnet_x","max_omnet_y"]].to_numpy()
-        simulation_time = new_simulation_variables_db[["start_time","stop_time"]].to_numpy()
+        self.simulation_time = new_simulation_variables_db[["start_time","stop_time"]].to_numpy()
 
         self.update_omnet_playground(playground_size)
-        self.update_omnet_simulation_time(simulation_time)
+        self.update_omnet_simulation_time(self.simulation_time)
         self.update_omnet_launchd()
 
 
@@ -62,7 +62,7 @@ class Agent:
 
         # features = self.collect_all_results(desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
         # features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts","TotalLostPackets"])
-        features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"])
+        features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"], modules = ["nic.mac1609_4","nic.mac1609_4"])
 
         if model == "Policy Gradient":
             reward = self.reward_pg(features,W)
@@ -157,22 +157,26 @@ class Agent:
         Returns:
             int: Reward for all RSUs in RSU network
         """
-        original_features = np.copy(features)
+        print("features",features)
+        rewards = np.copy(features)
         # print(features)
-        original_features[0] = np.nan_to_num(original_features[0],nan = -104)
-        original_features[1] = np.nan_to_num(original_features[1],nan = 0)
-        original_features[0] = (.017 * np.power(original_features[0,:]+104,2))/100
-        original_features[1] = (.0002 * np.power(original_features[1,:],2))/100
+        rewards[0] = np.nan_to_num(rewards[0],nan = -104)
+        rewards[1] = np.divide(rewards[1],self.simulation_time[1]-self.simulation_time[0])
+        rewards[0] = np.clip(rewards[0],-104,-50) # Clips decibels within expected range.
+        rewards[1] = np.clip(rewards[1],0,500) # Clips number of messages/time step.
+        print("rewards_pre",rewards)
+        rewards[0] = .25*np.sin(((rewards[0,:]+77)*np.pi)/54)+.25
+        rewards[1] = .25*np.sin(((rewards[1,:]-250)*np.pi)/500)+.25
 
         # print("processed features",features)
 
-        original_features = np.sum(original_features,axis=0)
+        rewards = np.sum(rewards,axis=0)
         
-        # for i in range(1,len(original_features)):
-        #     original_features[i] *= -.1*np.log(i+1)+1
-        # print(original_features)
-        
-        return original_features, features
+        # for i in range(1,len(features_copy)):
+        #     features_copy[i] *= -.1*np.log(i+1)+1
+        # print(features_copy)
+        print("rewards",rewards,'\n')
+        return rewards, features
 
 
     def kill_sumo_env(self):
@@ -365,12 +369,12 @@ class Agent:
         features = np.asarray(features)
         return features
 
-    def collect_rsu_results(self,rsu_network_idx,desired_features = ["recvPower_dBm:count","recvPower_dBm:mean","TotalLostPackets"]):
+    def collect_rsu_results(self,rsu_network_idx,desired_features = ["recvPower_dBm:count","recvPower_dBm:mean","totalTime"], modules = ["nic.mac1609_4","nic.mac1609_4","veinsmobility"]):
         features = np.empty((len(desired_features),len(rsu_network_idx)))
         for j,current_feature in enumerate(desired_features):
             current_feature_results = []
             for i in range(len(rsu_network_idx)):
-                current_rsu = "RSUExampleScenario.rsu[{}].nic.mac1609_4".format(i)
+                current_rsu = "RSUExampleScenario.rsu[{}].{}".format(i,modules[j])
                 current_filter = "name({}) AND module({})".format(current_feature,current_rsu)
                 results = subprocess.run(["scavetool","q","-f",f"{current_filter}","-l","-g",self.omnet_results_file], capture_output=True, text=True).stdout
                 results = re.findall(rf"{current_feature} (.*)",results)
@@ -506,4 +510,3 @@ class Agent:
 # intersection_ids = np.random.choice(sim_rsu_place.network_intersections.shape[0],size = 10,replace=False)
 # rsu_ids = np.random.choice(intersection_ids.shape[0],size = 5,replace=False)
 # reward = sim_rsu_place.simulation_step(rsu_ids,intersection_ids)
-
