@@ -259,7 +259,7 @@ class Actor_Critic(nn.Module):
                      mask: torch.Tensor):
         log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]
-        rsu_network = intersections[:,pointer_argmaxs[0,:],:]
+        rsu_network = intersections[:,rsu_idx,:]
         critic_reward = self.critic(rsu_network)
 
         return log_pointer_scores, pointer_argmaxs, rsu_idx, critic_reward

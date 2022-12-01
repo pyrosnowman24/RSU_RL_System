@@ -88,21 +88,18 @@ class DRL_System(LightningModule):
         if self.use_sim:
             rewards, features = self.agent.simulation_step(rsu_idx,intersection_idx[0],model = "Q Learning Positive")
             rewards = torch.tensor([np.array(rewards)],requires_grad=True,dtype=torch.float)
-            quit()
         else:
             rsu_intersections = intersections[0,rsu_idx,:].detach().numpy()
             rewards = np.empty(shape=(1,rsu_intersections.shape[0]))
-
             for i,intersection in enumerate(rsu_intersections):
                 info = self.rsu_performance_df[int(intersection[0]) == self.rsu_performance_df[:,0].astype(int)]
                 rewards[:,i] = info[0,-1]
             rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
-
         padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
         # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
         padded_rewards[pointer_argmaxs[0,:] != 0] = torch.tensor(rewards.clone().detach(),dtype=torch.float)
 
-        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, rsu_idx, padded_rewards, critic_reward)
+        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, rewards, padded_rewards, critic_reward)
 
         print("loss",loss)
 
@@ -157,49 +154,49 @@ class DRL_System(LightningModule):
         preprocessed_rewards = torch.tensor(preprocessed_rewards,requires_grad=True)
         return nn.MSELoss(reduction = 'mean')(preprocessed_rewards,critic_rewards)
 
-    def loss(self,log_prob, pointer_argmaxs, rsu_idx, rewards, critic_rewards):
+    def loss(self,log_prob, pointer_argmaxs, rewards, padded_rewards, critic_rewards):
         # with torch.no_grad():
         #     advs = rewards - critic_rewards * rewards.std() + rewards.mean()
             # advs = (advs - advs.mean()) / advs.std()
             # targets = (rewards - rewards.mean()) / rewards.std()
         entropy = self.entropy(log_prob)
-        actor_loss = self.actor_loss(log_prob, pointer_argmaxs, rewards)
+        actor_loss = self.actor_loss(log_prob, pointer_argmaxs, padded_rewards)
         critic_loss = self.critic_loss(rewards, critic_rewards)
 
         return actor_loss + critic_loss - entropy, entropy, actor_loss, critic_loss
 
     def pre_process_reward_data(self,reward_data,method = "boxcox",lmbda = 0.24098677879102673):
-        if isinstance(reward_data,torch.Tensor):
-            reward_data = reward_data.detach().numpy()
         if method == "boxcox":
+            if isinstance(reward_data,torch.Tensor):
+                reward_data = reward_data.detach().numpy()
             boxcox_rewards = stats.boxcox(reward_data+1e-8,lmbda=lmbda)
             return boxcox_rewards
         elif method == "sqrt":
-            sqrt_rewards = np.sqrt(reward_data)
+            sqrt_rewards = torch.sqrt(reward_data)
             return sqrt_rewards
         elif method == "inv":
             inv_rewards = 1/(reward_data+1e-8)
             return inv_rewards
         elif method == "log":
-            log_rewards = np.log(reward_data+1e-8)
+            log_rewards = torch.log(reward_data+1e-8)
             return log_rewards
         else:
             return reward_data
 
     def pre_process_critic_reward_data(self,critic_reward_data,method = "boxcox",lmbda = 0.24098677879102673):
-        if isinstance(critic_reward_data,torch.Tensor):
-            critic_reward_data = critic_reward_data.detach().numpy()
         if method == "boxcox":
+            if isinstance(critic_reward_data,torch.Tensor):
+                critic_reward_data = critic_reward_data.detach().numpy()
             inv_boxcox_critic_rewards = special.inv_boxcox(critic_reward_data,lmbda)
             return inv_boxcox_critic_rewards
         elif method == "sqrt":
-            inv_sqrt_critic_rewards = np.power(critic_reward_data,2)
+            inv_sqrt_critic_rewards = torch.power(critic_reward_data,2)
             return inv_sqrt_critic_rewards
         elif method == "inv":
             inv_critic_rewards = 1/(critic_reward_data+1e-8)
             return inv_critic_rewards
         elif method == "log":
-            inv_log_critic_rewards = np.exp(critic_reward_data)
+            inv_log_critic_rewards = torch.exp(critic_reward_data)
             return inv_log_critic_rewards
         else:
             return critic_reward_data
@@ -225,16 +222,16 @@ def save_model(model,model_directory,model_path):
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 100
+    max_epochs = 50
     train_new_model = True
-    save_model_bool = True
+    save_model_bool = False
     display_figures = True
     use_sim = False
 
     simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-    model_name = "100_sqrt_preprocess"
+    model_name = "50_critic_no_buffer"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
     
@@ -250,7 +247,6 @@ if __name__ == '__main__':
             f = open(os.path.join(model_directory,"output.txt"),'w')
             sys.stdout = f
     if train_new_model:
-        simulation_agent = Agent()
         model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool, use_sim = use_sim, rsu_performance_df = rsu_performance_df)
         trainer = Trainer(max_epochs = max_epochs)
         datamodule = RSU_Intersection_Datamodule(simulation_agent)

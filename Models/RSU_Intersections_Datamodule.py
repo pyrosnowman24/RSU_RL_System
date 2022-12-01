@@ -118,7 +118,7 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def __init__(self,
                  agent,
                  batch_size: int = 1,
-                 train_test_split: float = 1,
+                 train_test_split: float = .6,
                  n_scenarios: int = 100,
                  min_intersections: int = 10,
                  max_intersections: int = 30,
@@ -150,6 +150,6 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size = self.batch_size,num_workers=4)
 
-    # def test_dataloader(self):
-    #     return DataLoader(self.test_dataset, batch_size = self.batch_size,num_workers=4)
+    def predict_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size = self.batch_size,num_workers=4)
 

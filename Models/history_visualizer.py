@@ -8,7 +8,7 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/acelab/Dissertation/RSU_RL_Placement/trained_models/"
-model_name = "50_sqrt_preprocess"
+model_name = "50_critic_no_buffer"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
@@ -115,8 +115,8 @@ def plot_reward_critic_reward():
         critic_reward[i] = [float(x) for x in results]
 
     reward = np.concatenate(reward).ravel()
+    reward = reward[reward!=.1]
     critic_reward = np.concatenate(critic_reward).ravel()
-    critic_reward = special.inv_boxcox(critic_reward, lmbda)
 
     error = np.power(np.subtract(reward,critic_reward),2)
 
@@ -162,7 +162,7 @@ def plot_critic_performance():
     ax2.set_ylabel("Critic Reward")
     plt.show()
 
-def box_plot_rewards():
+def hist_rewards():
     lmbda = 0.24098677879102673
     reward = np.empty(shape = reward_history.shape,dtype=object)
     for i in range(reward.shape[0]):
@@ -176,12 +176,27 @@ def box_plot_rewards():
         critic_reward[i] = [float(x) for x in results]
 
     reward = np.concatenate(reward).ravel()
+    reward = reward[reward!=.1]
     critic_reward = np.concatenate(critic_reward).ravel()
-    critic_reward = special.inv_boxcox(critic_reward, lmbda)
 
     fig,(ax1,ax2) = plt.subplots(1,2)
-    ax1.boxplot(reward)
-    ax2.boxplot(critic_reward)
+    ax1.hist(reward)
+    ax2.hist(critic_reward)
     plt.show()
 
-plot_reward_critic_reward()
+def sqrt_rewards():
+    reward = np.empty(shape = reward_history.shape,dtype=object)
+    for i in range(reward.shape[0]):
+        results = re.findall(r'[-+]?\d*\.?\d+',reward_history[i])
+        reward[i] = [float(x) for x in results]
+    reward = np.concatenate(reward).ravel()
+    reward = reward[reward!=.1]
+    sqrt_reward = np.sqrt(reward)
+
+    fig,(ax1,ax2) = plt.subplots(1,2)
+    ax1.hist(reward,bins=15)
+    ax2.hist(sqrt_reward,bins=15)
+    plt.show()
+
+
+sqrt_rewards()

@@ -99,10 +99,6 @@ def plot_rewards_xy():
     ax.set_title("# Roads Connected to Intersection vs. Reward")
     plt.show()
 
-    fig,ax = plt.subplots(1)
-    ax.hist(np.log(rewards+1e-8))
-    plt.show()
-
 def plot_reward_skews():
     lmbda = 0.24098677879102673 # Variable determined by algorithm originally based on sampled rewards from entire data.
 
@@ -120,7 +116,8 @@ def plot_reward_skews():
     print("Log Shapiro",stats.shapiro(reward_log)[1])
     print('\n')
 
-    reward_sqrt = np.sqrt(df['reward'])
+    rewards = df['reward'][df['reward']>.01]
+    reward_sqrt = np.sqrt(rewards)
     print("SQRT Transform",reward_sqrt.skew())
     print("SQRT Shapiro",stats.shapiro(reward_sqrt)[1])
     print('\n')
@@ -134,8 +131,9 @@ def plot_reward_skews():
     inv_boxcox = special.inv_boxcox(reward_boxcox,lmbda)
     print("Inverse Box Cox Transform",inv_boxcox.skew())
     
+    print(reward_sqrt)
     fig,ax = plt.subplots(1)
-    ax.hist(reward_sqrt)
+    ax.boxplot(reward_sqrt)
     plt.show()
     
 

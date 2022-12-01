@@ -164,7 +164,6 @@ class Agent:
         rewards[1] = np.divide(rewards[1],self.simulation_time[1]-self.simulation_time[0])
         rewards[0] = np.clip(rewards[0],-104,-50) # Clips decibels within expected range.
         rewards[1] = np.clip(rewards[1],0,500) # Clips number of messages/time step.
-        print("rewards_pre",rewards)
         rewards[0] = .25*np.sin(((rewards[0,:]+77)*np.pi)/54)+.25
         rewards[1] = .25*np.sin(((rewards[1,:]-250)*np.pi)/500)+.25
 
@@ -175,7 +174,6 @@ class Agent:
         # for i in range(1,len(features_copy)):
         #     features_copy[i] *= -.1*np.log(i+1)+1
         # print(features_copy)
-        print("rewards",rewards,'\n')
         return rewards, features
 
 
