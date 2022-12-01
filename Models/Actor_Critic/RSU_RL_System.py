@@ -105,7 +105,7 @@ class DRL_System(LightningModule):
 
         # data = np.array((intersections.detach().numpy(),rsu_idx,features,rewards.detach().numpy(), critic_reward.detach().numpy(), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
         preprocessed_critic_rewards = self.pre_process_critic_reward_data(critic_reward, method = self.method)
-        data = np.array((intersections.detach().numpy(),rsu_idx,np.around(padded_rewards.detach().numpy(),4), np.around(preprocessed_critic_rewards,4), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
+        data = np.array((intersections.detach().numpy(),rsu_idx,np.around(padded_rewards.detach().numpy(),4), np.around(preprocessed_critic_rewards.detach().numpy(),4), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
         self.df_history.loc[self.df_history.shape[0]] = data
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
@@ -190,7 +190,7 @@ class DRL_System(LightningModule):
             inv_boxcox_critic_rewards = special.inv_boxcox(critic_reward_data,lmbda)
             return inv_boxcox_critic_rewards
         elif method == "sqrt":
-            inv_sqrt_critic_rewards = torch.power(critic_reward_data,2)
+            inv_sqrt_critic_rewards = torch.pow(critic_reward_data,2)
             return inv_sqrt_critic_rewards
         elif method == "inv":
             inv_critic_rewards = 1/(critic_reward_data+1e-8)
