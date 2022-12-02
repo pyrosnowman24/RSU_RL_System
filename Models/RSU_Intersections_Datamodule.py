@@ -123,7 +123,8 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
                  min_intersections: int = 10,
                  max_intersections: int = 30,
                  min_pre_rsu_network: int = 0,
-                 max_pre_rsu_network: int = 4):
+                 max_pre_rsu_network: int = 4,
+                 stage = None):
         super().__init__()
         self.batch_size = batch_size
         self.train_test_split = train_test_split
@@ -135,7 +136,7 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
         self.agent = agent
         self.setup()
 
-    def setup(self):
+    def setup(self, stage: str = None):
         self.database = RSU_Intersection_Dataset(self.agent,
                                                  self.n_scenarios,
                                                  self.min_intersections,

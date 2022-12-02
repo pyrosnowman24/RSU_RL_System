@@ -133,7 +133,7 @@ def plot_reward_skews():
     
     print(reward_sqrt)
     fig,ax = plt.subplots(1)
-    ax.boxplot(reward_sqrt)
+    ax.hist(reward_sqrt)
     plt.show()
     
 
