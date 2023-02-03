@@ -22,6 +22,7 @@ from sklearn.preprocessing import StandardScaler
 currentdir = os.path.dirname(os.path.realpath(__file__))
 parentdir = os.path.dirname(currentdir)
 parentdir2 = os.path.dirname(parentdir)
+sys.path.append(parentdir)
 sys.path.append(parentdir2)
 
 from Models.Agent import Agent
@@ -104,7 +105,7 @@ class Critic_RF():
 class Critic_Intersections(LightningModule):
     def __init__(self,
                  rsu_performance_df,
-                 num_features: int = 4,
+                 num_features: int = 5,
                  lr: float = .00001,
                  ):
         super(Critic_Intersections,self).__init__()
@@ -115,22 +116,17 @@ class Critic_Intersections(LightningModule):
         self.rewards_df = self.rsu_performance_df[:,-1].astype(float).reshape(-1,1)
         self.rewards_df = torch.tensor(self.rewards_df, requires_grad=False,dtype=torch.float)
         self.rewards_df = self.pre_process_reward_data(self.rewards_df,method = "sqrt")
-        scaler = StandardScaler()
-        scaler.fit(self.rewards_df)
-        self.rewards_df = scaler.transform(self.rewards_df)
+        # scaler = StandardScaler()
+        # scaler.fit(self.rewards_df)
+        # self.rewards_df = scaler.transform(self.rewards_df)
 
         # Add the scaling to the preprocessing
         # removing the call to preprocessing in the training/prediction functions
 
-        fig,ax = plt.subplots(1)
-        ax.hist(self.rewards_df)
-        plt.show()
-        quit()
-
         self.lr = lr
 
         self.predict_reward_history = np.empty(0)
-        self.predict_criticReward_history = np.empty(0)
+        self.predict_critic_reward_history = np.empty(0)
 
     def forward(self,intersection):
         rewards = self.critic(intersection)
@@ -139,7 +135,7 @@ class Critic_Intersections(LightningModule):
     def predict_step(self, batch, batch_idx, dataloader_idx = None):
         intersections = batch[0][:,1:,:]
         mask = batch[3][0,1:].detach().numpy()
-        rsu_intersections = np.empty(shape=(0,5))
+        rsu_intersections = np.empty(shape=(0,intersections.shape[-1]))
         for i,value in enumerate(mask):
             if value:
                 rsu_intersections = np.vstack([rsu_intersections,intersections[:,i,:]])
@@ -154,7 +150,7 @@ class Critic_Intersections(LightningModule):
         rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
         preprocessed_rewards = self.pre_process_reward_data(rewards,method = "sqrt")
 
-        self.predict_criticReward_history = np.append(self.predict_criticReward_history, critic_rewards)
+        self.predict_critic_reward_history = np.append(self.predict_critic_reward_history, critic_rewards)
         self.predict_reward_history = np.append(self.predict_reward_history, preprocessed_rewards)
 
         print("Rewards",preprocessed_rewards)
@@ -164,7 +160,7 @@ class Critic_Intersections(LightningModule):
 
     def plot_predict_performance(self):
         fig, (ax1,ax2) = plt.subplots(1,2)
-        ax1.boxplot(self.predict_criticReward_history)
+        ax1.boxplot(self.predict_critic_reward_history)
         ax2.boxplot(self.predict_reward_history)
         ax1.set_title("Critic Rewards")
         ax2.set_title("Rewards")
@@ -175,7 +171,8 @@ class Critic_Intersections(LightningModule):
         intersection_idx = batch[1]
         rsu_network_idx = batch[2]
         mask = batch[3][0,1:].detach().numpy()
-        rsu_intersections = np.empty(shape=(0,5))
+        rsu_intersections = np.empty(shape=(0,intersections.shape[-1]))
+
         for i,value in enumerate(mask):
             if value:
                 rsu_intersections = np.vstack([rsu_intersections,intersections[:,i,:]])
@@ -354,20 +351,20 @@ class Critic_Intersections_RF(LightningModule):
         else:
             return critic_reward_data
 
-if __name__ == '__main__':
-    max_epochs = 300
-    rsu_performance_df = pd.read_csv("/home/acelab/Dissertation/RSU_RL_Placement/rsu_performance_dataset").to_numpy()
-    trainer = Trainer(max_epochs = max_epochs)
-    simulation_agent = Agent()
+# if __name__ == '__main__':
+#     max_epochs = 300
+#     rsu_performance_df = pd.read_csv("/home/demo/RSU_RL_Placement/rsu_performance_dataset").to_numpy()
+#     trainer = Trainer(max_epochs = max_epochs)
+#     simulation_agent = Agent()
 
-    model = Critic_Intersections(rsu_performance_df)
-    trainer = Trainer(max_epochs = max_epochs)
-    datamodule = RSU_Intersection_Datamodule(simulation_agent)
-    trainer.fit(model,datamodule=datamodule)
+#     model = Critic_Intersections(rsu_performance_df)
+#     trainer = Trainer(max_epochs = max_epochs)
+#     datamodule = RSU_Intersection_Datamodule(simulation_agent)
+#     trainer.fit(model,datamodule=datamodule)
 
-    trainer.predict(model,datamodule=datamodule)
+#     trainer.predict(model,datamodule=datamodule)
 
-    model.plot_predict_performance()
+#     model.plot_predict_performance()
 
 
 

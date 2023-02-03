@@ -8,6 +8,9 @@ import subprocess
 import re
 import pyproj
 import pandas as pd
+import sys
+
+from reward import RewardFunctions
 
 class Agent:
     # This class will be responsible for keeping track of the current simulation and the environment for the simulation (sumo stuff)
@@ -16,9 +19,10 @@ class Agent:
         self.setup_simulation(index=0)
         network_intersections = self.prepare_intersections()
         self.network_intersections = torch.Tensor(network_intersections) # The coordinates of all intersections
+        self.reward_functions = RewardFunctions()
 
     def setup_paths(self):
-        self.parent_dir ="/home/acelab/veins_sim/"
+        self.parent_dir ="/home/demo/veins_sim/"
         self.simulation_dir = os.path.join(self.parent_dir,"veins/examples/veins/")
         self.simulation_info = os.path.join(self.simulation_dir,"simulation_info.csv")
         self.simulation_variables_db = pd.read_csv(self.simulation_info)
@@ -53,7 +57,7 @@ class Agent:
         except: pass
 
         rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
-        self.place_rsu_network(rsu_network)
+        self.place_rsu_network(rsu_network[:,:-1])
         process1 = subprocess.Popen("./run.sh -d",cwd=self.parent_dir,shell=True) #Sumo
         process2 = subprocess.Popen("./run -u Cmdenv -M release",cwd=self.simulation_dir,shell=True) #Omnet
         # process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
@@ -64,118 +68,9 @@ class Agent:
         # features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts","TotalLostPackets"])
         features = self.collect_rsu_results(rsu_network_idx,desired_features = ["recvPower_dBm:mean","ReceivedBroadcasts"], modules = ["nic.mac1609_4","nic.mac1609_4"])
 
-        if model == "Policy Gradient":
-            reward = self.reward_pg(features,W)
-        if model == "Q Learning":
-            reward = self.reward_ql(features,W)
-        if model == "Q Learning Positive":
-            reward, features = self.reward_positive_ql(features,sim_idx,W)
-        else:
-            reward = self.reward(features,W)
+        rewards, reward, _ = self.reward_functions(model, features, rsu_network, self.network_intersections, W, self.simulation_time)
 
-        return reward, features
-
-    def reward(self,features,W):
-        """Reward for Actor Critic based model. The higher the reward the better the solution.
-
-        Args:
-            features (numpy.array): The valeus of each feature for all RSUs in network.
-            W (list): Used to bias rewards between features
-
-        Returns:
-            int: Reward for all RSUs in RSU network
-        """
-        print(features)
-        avg_features = np.nanmean(features,axis=1)
-        avg_features[0] = -(300/avg_features[0])
-        avg_features[1] = 200/avg_features[1,:]
-        print(avg_features)
-        reward = np.multiply(avg_features,W)
-        reward = np.sum(reward)
-        reward = reward - len(reward)
-        return reward
-
-    def reward_pg(self,features,W):
-        """Reward for Policy Gradient based model. The lower the reward the better the solution.
-
-        Args:
-            features (numpy.array): The valeus of each feature for all RSUs in network.
-            W (list): Used to bias rewards between features
-
-        Returns:
-            int: Reward for all RSUs in RSU network
-        """
-        # print("features",features)
-        features[0] = np.nan_to_num(features[0],nan = -104)
-        features[1] = np.nan_to_num(features[1],nan = 0)
-        # features[0] = np.power(100/(features[0,:]+30),2)
-        # features[1] = .025*features[1]
-        features[0] = np.power(50/(features[0,:]+105),2)
-        features[1] = 500/(features[1,:]+1)
-
-        # print("processed features",features)
-
-        features = np.sum(features,axis=0)
-        for i in range(len(features)):
-            features[i] += .15 * np.square(i)
-        # print(features)
-        return features
-
-    def reward_ql(self,features,W):
-        """Reward for Q-Learning based model. The higher the reward the better the solution.
-
-        Args:
-            features (numpy.array): The valeus of each feature for all RSUs in network.
-            W (list): Used to bias rewards between features
-
-        Returns:
-            int: Reward for all RSUs in RSU network
-        """
-        # print("features",features)
-        print(features)
-        features[0] = np.nan_to_num(features[0],nan = -104)
-        features[1] = np.nan_to_num(features[1],nan = 0)
-        features[0] = .005 * np.power(features[0,:]+104,2)
-        features[1] = .00005 * np.power(features[1,:],2)
-        # print(features)
-
-        # print("processed features",features)
-
-        features = np.sum(features,axis=0)
-        for i in range(len(features)):
-            features[i] -= .10 * np.square(i)
-        # print(features)
-        return features
-
-    def reward_positive_ql(self,features,sim_idx,W):
-        """Reward for Q-Learning based model. The higher the reward the better the solution. This version will always be positive.
-
-        Args:
-            features (numpy.array): The valeus of each feature for all RSUs in network.
-            W (list): Used to bias rewards between features
-
-        Returns:
-            int: Reward for all RSUs in RSU network
-        """
-        print("features",features)
-        rewards = np.copy(features)
-        # print(features)
-        rewards[0] = np.nan_to_num(rewards[0],nan = -104)
-        rewards[1] = np.divide(rewards[1],self.simulation_time[1]-self.simulation_time[0])
-        rewards[0] = np.clip(rewards[0],-104,-50) # Clips decibels within expected range.
-        rewards[1] = np.clip(rewards[1],0,500) # Clips number of messages/time step.
-        rewards[0] = .25*np.sin(((rewards[0,:]+77)*np.pi)/54)+.25
-        rewards[1] = .25*np.sin(((rewards[1,:]-250)*np.pi)/500)+.25
-
-        # print("processed features",features)
-
-        rewards = np.sum(rewards,axis=0)
-        
-        # for i in range(1,len(features_copy)):
-        #     features_copy[i] *= -.1*np.log(i+1)+1
-        # print(features_copy)
-        return rewards, features
-
+        return rewards, reward, features
 
     def kill_sumo_env(self):
         print('\n',os.path.exists("sumo-launchd.pid"),'\n')
@@ -185,7 +80,7 @@ class Agent:
         else: print("lasdjhfapsdncjkvnawuinbiufah")
 
     def display_environment(self,rsu_network_idx,sim_idx):
-        rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)
+        rsu_network = self.get_simulation_rsu_network(rsu_network_idx,sim_idx)[:,:-1]
         self.place_rsu_network(rsu_network)
         process2 = subprocess.Popen("./run",cwd=self.simulation_dir,shell=True)
 
@@ -411,7 +306,7 @@ class Agent:
         return intersections
 
     def find_junctions(self,lines):
-        intersections = np.empty((0,5))
+        intersections = np.zeros((0,6))
         for i,line in enumerate(lines):
             if "<junction " in line:
                 id = re.search('id=\"(.*?)\" ', line)
@@ -430,10 +325,11 @@ class Agent:
                     else: z = 0
 
                     incLanes, len_incLanes = self.get_incLanes(line)
-                    coords = np.array((id,x,y,z,len_incLanes))
-                    coords = np.reshape(coords,(1,5))
+                    coords = np.array((id,x,y,z,len_incLanes,0))
+                    coords = np.reshape(coords,(1,6))
                     coords[0,1:3] = self.traci2omnet(coords[0,1],coords[0,2])
                     intersections = np.append(intersections, coords, axis=0)
+        intersections[:,-1] = self.closeness_centrality(intersections)
         return intersections
 
     def create_projection(self,lines):
@@ -472,7 +368,7 @@ class Agent:
         Returns:
             numpy.ndArray: Array of coordinates for the RSU network.
         """
-        intersections = self.network_intersections[sim_idx[rsu_net_idx],1:-1]
+        intersections = self.network_intersections[sim_idx[rsu_net_idx],1:]
         return intersections
 
     def get_simulated_intersections(self,idx):
@@ -503,8 +399,21 @@ class Agent:
         incLanes = np.append(incLanes,unique)
         return incLanes, len(incLanes)
 
-# sim_rsu_place = Agent()
+    def closeness_centrality(self, intersections):
+        closeness_degrees = np.zeros((intersections.shape[0]))
+        for i, rsu in enumerate(intersections):
+            distance_sum = 0
+            for intersection in intersections:
+                distance = np.linalg.norm(rsu - intersection)
+                distance_sum += distance
+            closeness_degree = intersections.shape[0] / distance_sum
+            closeness_degrees[i] = closeness_degree * 1000
+        return closeness_degrees
 
+# sim_rsu_place = Agent()
+# 
 # intersection_ids = np.random.choice(sim_rsu_place.network_intersections.shape[0],size = 10,replace=False)
 # rsu_ids = np.random.choice(intersection_ids.shape[0],size = 5,replace=False)
-# reward = sim_rsu_place.simulation_step(rsu_ids,intersection_ids)
+# rewards, reward, features = sim_rsu_place.simulation_step(rsu_ids, intersection_ids, model = "Q Learning Positive")
+# print("rewards",reward)
+# print("features",features)

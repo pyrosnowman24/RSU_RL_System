@@ -8,37 +8,35 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-model_name = "1000_no_entropy"
+model_name = "ts_new_reward_7_cities_256_hidden_5000_epochs_ts_loss"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
 history_df = pd.read_csv(history_path, on_bad_lines='skip', engine = 'python')
 
-rsu_history = history_df['rsu_network']
-intersections_history = history_df['intersection_idx']
+ts_path_history = history_df['ts_path']
 reward_history = history_df['reward']
-critic_reward_history = history_df['critic_reward']
 avg_rsu = 0
 
-for rsu_network in rsu_history:
-    results = re.findall(r"\d+",rsu_network)
+for ts_path in ts_path_history:
+    results = re.findall(r"\d+",ts_path)
     avg_rsu += len(results)
     avg_rsu /= 2
-# print(avg_rsu)
 
 loss = history_df['loss'].to_numpy()
 
 def plot_single_loss():
-    x = np.arange(0,len(loss)+1,step = 100)
+    x = np.arange(0,len(loss)+1,step = 5000)
     average_loss = []
     for i in range(len(x)-1):
         average_loss.append(np.nanmean(loss[x[i]:x[i+1]]))
+    print(average_loss)
     fig,ax = plt.subplots(1)
     ax.plot(loss)
     ax.plot(x[1:],average_loss)
     ax.set_xlabel("Sample")
     ax.set_ylabel("Actor Loss")
-    ax.set_title("Actor Loss over 200 Epochs")
+    ax.set_title("Actor Loss over 1000 Epochs")
     plt.show()
 
 def plot_loss_history():
@@ -82,9 +80,9 @@ def plot_loss_history():
     plt.show()
 
 def plot_trend_intersections_rsu():
-    len_rsu_net = np.zeros(shape = rsu_history.shape)
-    for i in range(len(rsu_history)):
-        results = re.findall(r"\d+",rsu_history[i])
+    len_rsu_net = np.zeros(shape = ts_path_history.shape)
+    for i in range(len(ts_path_history)):
+        results = re.findall(r"\d+",ts_path_history[i])
         len_rsu_net[i] = len(results)
 
     len_intersections = np.zeros(shape = intersections_history.shape)
@@ -199,4 +197,4 @@ def sqrt_rewards():
     plt.show()
 
 
-plot_loss_history()
+plot_single_loss()

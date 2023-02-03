@@ -46,8 +46,8 @@ class RSU_Intersection_Dataset(Dataset):
         rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
 
         intersections = self.agent.get_simulated_intersections(intersection_idx)
-        scaled_intersections = self.scale_intersections(intersections)
-        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(scaled_intersections, intersection_idx,rsu_network_idx)
+        # scaled_intersections = self.scale_intersections(intersections)
+        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
 
         return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask
 

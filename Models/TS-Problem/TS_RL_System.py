@@ -1,7 +1,8 @@
 from json import encoder
 from tkinter import Variable
 from typing import List, Tuple, Callable, Iterator
-from collections import OrderedDict, deque, namedtuple
+from collections import OrderedDict, deque
+from itertools import permutations
 import sys
 import os
 
@@ -17,98 +18,63 @@ from scipy import stats,special
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-currentdir = os.path.dirname(os.path.realpath(__file__))
-parentdir = os.path.dirname(currentdir)
-parentdir2 = os.path.dirname(parentdir)
-sys.path.append(parentdir)
-sys.path.append(parentdir2)
-
-from Models.Agent import Agent
 from Actor_Critic import Actor_Critic
-from Models.RSU_Intersections_Datamodule import RSU_Intersection_Datamodule
+from TS_Datamodule import TS_Datamodule
 
 import numpy as np
 import argparse
 
 np.set_printoptions(suppress=True)
 
-class DRL_System(LightningModule):
+class TS_System(LightningModule):
     def __init__(self, 
-                     agent,
-                     num_features: int = 5,
-                     nhead: int = 4,
-                     num_layers: int = 1, 
-                     lr: float = 5e-4,
-                     W: int = [.5,.5],
+                     num_features: int = 2,
+                     nhead: int = 2,
+                     num_layers: int = 8, 
+                     lr: float = 1e-5,
                      model_directory = "/home/demo/",
                      save_data_bool:bool = False,
-                     use_sim: bool = True,
-                     rsu_performance_df = None,
                      lmbda: float = 0.24098677879102673,
                      method: str = "sqrt"
                      ):
 
-        super(DRL_System,self).__init__()
-        self.agent = agent
+        super(TS_System,self).__init__()
         self.nhead = nhead
         self.num_layers = num_layers
         self.lr = lr
-        self.W = W
         self.num_features = num_features
 
-        self.actor_critic = Actor_Critic(num_features, nhead, self.W, self.num_layers)
+        self.actor_critic = Actor_Critic(num_features, nhead, self.num_layers)
         
         pd.options.display.float_format = '{:.4f}'.format
         # self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
-        self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
+        self.df_history = pd.DataFrame(columns=["ts_path","reward","loss"],dtype=object)
         self.df_new_data = self.df_history.copy()
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.save_data_bool = save_data_bool
-        self.use_sim = use_sim
-        self.rsu_performance_df = rsu_performance_df
         self.lmbda = lmbda
         self.method = method
 
-    def forward(self,intersections: Tensor, mask: Tensor) -> Tensor:
-        _, _, rsu_network, critic_reward = self.actor_critic(intersections, mask)
-        return rsu_network, critic_reward
+    def forward(self,intersections: Tensor) -> Tensor:
+        _, _, ts_path, critic_reward = self.actor_critic(intersections)
+        return ts_path, critic_reward
 
-    def training_step(self,batch:Tuple[Tensor,Tensor],batch_idx) -> OrderedDict:
-        intersections = batch[0]
-        intersection_idx = batch[1]
-        rsu_network_idx = batch[2]
-        mask = batch[3]
-        # intersections = intersections[:,mask[0,:],:]
-        log_pointer_scores, pointer_argmaxs, rsu_idx, critic_reward = self.actor_critic(intersections[:,:,1:],mask)
+    def training_step(self,batch:Tuple[Tensor,Tensor]) -> OrderedDict:
+        cities = batch.type(torch.float)
+        self.best_reward, self.best_path = self.calculate_best_reward(cities)
+        log_pointer_scores, pointer_argmaxs, ts_path, critic_reward = self.actor_critic(cities)
+        ts_reward, loss = self.ts_loss(cities, ts_path[0,:])
+        reward = torch.tensor(ts_reward, requires_grad=True,dtype=torch.float)
 
-        if self.use_sim:
-            reward_set, rewards, features = self.agent.simulation_step(rsu_idx,intersection_idx[0],model = "Q Learning Positive")
-            rewards = torch.tensor([np.array(rewards)],requires_grad=True,dtype=torch.float)
-        else:
-            rsu_intersections = intersections[0,rsu_idx,:].detach().numpy()
-            rewards = np.empty(shape=(1,rsu_intersections.shape[0]))
-            for i,intersection in enumerate(rsu_intersections):
-                info = self.rsu_performance_df[int(intersection[0]) == self.rsu_performance_df[:,0].astype(int)]
-                rewards[:,i] = info[0,-1]
-            rewards = torch.tensor(rewards, requires_grad=True,dtype=torch.float)
         padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
         # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
-        padded_rewards[pointer_argmaxs[0,:] != 0] = rewards.clone().detach().type(torch.float)
+        padded_rewards[pointer_argmaxs[0,:] != 0] = reward.clone().detach().type(torch.float)
 
-        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, rewards, padded_rewards, critic_reward)
+        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, reward, padded_rewards, critic_reward)
 
-        print("loss",loss)
-
-        # data = np.array((intersections.detach().numpy(),rsu_idx,features,rewards.detach().numpy(), critic_reward.detach().numpy(), entropy.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy(), loss.detach().numpy()),dtype=object)
-        preprocessed_critic_rewards = self.pre_process_critic_reward_data(critic_reward, method = self.method)
-        data = np.array((intersections.detach().numpy(),
-                         rsu_idx.detach().numpy(),
+        data = np.array((cities.detach().numpy(),
                          np.around(padded_rewards.detach().numpy(),4),
-                         np.around(preprocessed_critic_rewards.detach().numpy(),4),
-                         entropy.detach().numpy(),
-                         actor_loss.detach().numpy(),
-                         critic_loss.detach().numpy(),
                          loss.detach().numpy()),
                          dtype=object
                        )
@@ -117,6 +83,47 @@ class DRL_System(LightningModule):
         if self.save_data_bool:
             self.save_data()
         return loss
+
+    def test_step(self,batch,batch_idx):
+        cities = batch.type(torch.float)
+        self.best_reward, self.best_path = self.calculate_best_reward(cities)
+        log_pointer_scores, pointer_argmaxs, ts_path, critic_reward = self.actor_critic(cities)
+        ts_reward, loss = self.ts_loss(cities, ts_path[0,:])
+        reward = torch.tensor(ts_reward, requires_grad=True,dtype=torch.float)
+        padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
+        # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
+        padded_rewards[pointer_argmaxs[0,:] != 0] = reward.clone().detach().type(torch.float)
+
+        # loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, reward, padded_rewards, critic_reward)
+        metrics = {"test_ts_reward": reward, "test_loss": loss}
+        print(ts_path)
+        print(metrics)
+        return metrics
+
+    def calculate_best_reward(self,cities):
+        indices = np.arange(cities.shape[1])
+        path_permutations = list(permutations(indices))
+        best_reward = 100000
+        best_path = None
+        for path in path_permutations:
+            reward = self.path_reward(path, cities)
+            if reward < best_reward:
+                best_reward = reward
+                best_path = path
+        return best_reward, best_path
+
+    def ts_loss(self, cities, ts_path):
+        ts_path_reward = self.path_reward(ts_path, cities)
+
+        loss = ts_path_reward - self.best_reward
+        return ts_path_reward, loss
+
+    def path_reward(self, path, cities):
+        reward = 0
+        for index in path[1:]:
+            distance = np.linalg.norm(cities[0,index]-cities[0,index-1])
+            reward += distance
+        return reward
 
     def entropy(self,log_prob):
         """Function to calculate the losses for the actor and critic.
@@ -167,7 +174,8 @@ class DRL_System(LightningModule):
             # targets = (rewards - rewards.mean()) / rewards.std()
         entropy = self.entropy(log_prob)
         actor_loss = self.actor_loss(log_prob, pointer_argmaxs, padded_rewards)
-        critic_loss = self.critic_loss(rewards, critic_rewards)
+        # critic_loss = self.critic_loss(rewards, critic_rewards)
+        critic_loss = torch.tensor(0)
 
         return actor_loss, entropy, actor_loss, critic_loss
 
@@ -228,23 +236,17 @@ def save_model(model,model_directory,model_path):
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 200
-    train_new_model = True
-    save_model_bool = False
+    max_epochs = 2000
+    save_model_bool = True
     display_figures = True
-    use_sim = False
 
-    simulation_agent = Agent()
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-    model_name = "200_no_entropy"
+    model_name = "ts_new_reward_7_cities_256_hidden_5000_epochs_ts_loss"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
-    
-    if not use_sim: rsu_performance_df = pd.read_csv("/home/demo/RSU_RL_Placement/intersection_performance_dataset_new").to_numpy()
-    else: rsu_performance_df = None
 
-    checkpoint_name = "Training_for_Reward"
+    checkpoint_name = "ts_test"
     checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
     checkpoint_path = os.path.join(checkpoint_directory,checkpoint_name)
 
@@ -252,19 +254,10 @@ if __name__ == '__main__':
             os.makedirs(model_directory)
             f = open(os.path.join(model_directory,"output.txt"),'w')
             sys.stdout = f
-    if train_new_model:
-        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool, use_sim = use_sim, rsu_performance_df = rsu_performance_df)
-        trainer = Trainer(max_epochs = max_epochs)
-        datamodule = RSU_Intersection_Datamodule(simulation_agent)
-        trainer.fit(model,datamodule=datamodule)
-        if save_model_bool:
-            save_model(model,model_directory,model_path)
 
-    else:
-        model = DRL_System(simulation_agent,model_directory = model_directory, save_data_bool= save_model_bool)
-        model.load_state_dict(torch.load(checkpoint_path))
-        trainer = Trainer(max_epochs = max_epochs,gradient_clip_value = 0.5)
-        datamodule = RSU_Intersection_Datamodule(simulation_agent)
-        trainer.fit(model,datamodule=datamodule)
-        if save_model_bool:
-            save_model(model,model_directory,model_path)
+    model = TS_System(model_directory = model_directory, save_data_bool= save_model_bool)
+    trainer = Trainer(max_epochs = max_epochs)
+    datamodule = TS_Datamodule(n_scenarios=100, n_cities=7)
+    trainer.fit(model,datamodule=datamodule)
+    if save_model_bool:
+        save_model(model,model_directory,model_path)

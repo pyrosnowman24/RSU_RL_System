@@ -57,8 +57,8 @@ class PointerNetwork(nn.Module):
             x_decoder: Encoding over the output tokens.
             x_encoder: Encoding over the input tokens.
         Shape:
-            x_decoder: (B, Ne, C)
-            x_encoder: (B, Nd, C)
+            x_decoder: (B, Nd, C)
+            x_encoder: (B, Ne, C)
         """
 
         # print("\n x encoded shape",x_encoder.shape)
@@ -112,11 +112,13 @@ class PointerNetwork(nn.Module):
         return torch.nn.functional.log_softmax(x, dim=dim)
 
 class Actor(nn.Module):
-    def __init__(self,num_features = 4,
-                      nhead = 4,
-                      W = [.5,.5],
-                      c_embed = 16,
-                      n_layers = 1):
+    def __init__(self, 
+                 num_features = 4,
+                 nhead = 4,
+                 W = [.5,.5],
+                 c_embed = 256,
+                 n_layers = 1
+                 ):
         super(Actor,self).__init__()
         self.c_embed = c_embed
         self.embedding = Embedding(num_features,c_embed)
@@ -125,8 +127,8 @@ class Actor(nn.Module):
         self.pointer = PointerNetwork(c_embed)
         self.W = W
 
-    def forward(self,intersections,mask):
-        print(mask.shape)
+    def forward(self,intersections):
+        mask = np.ones(shape=intersections.shape[1])
         # print("intersections",intersections)
         # print("mask",mask)
         # print("Input shape",intersections.shape)
@@ -145,39 +147,37 @@ class Actor(nn.Module):
         #         print(p)
 
         embedded_state = self.embedding(intersections)
-        # print("embedded_state",embedded_state)
+        # print("embedded_state",embedded_state.shape)
 
         encoder_state = self.encoder(embedded_state)
-        # print("encoder_state",encoder_state)
+        # print("encoder_state",encoder_state.shape)
 
         decoder_input = encoder_state[:,:1,:]
-        # print("decoder input",decoder_input)
+        # print("decoder input",decoder_input.shape)
 
         if np.isnan(decoder_input.detach().numpy().sum()): quit()
 
         q_values = []
         masked_argmaxs = []
         for i in range(intersections.shape[1]):
-            if i <= 1: mask[:,0] = False
+            # if i <= 1: mask[:,0] = False
             decoder_state = self.decoder(decoder_input,encoder_state)
             # print("decoder_state",decoder_state)
 
             q_value = self.pointer(decoder_state,encoder_state)
-            print("Pointer output",q_value)
+            # print("Pointer output",q_value.shape)
             _, masked_argmax = self.masked_max(q_value,mask, dim=-1)
-            print("masked argmax",masked_argmax)
+            # print("masked argmax",masked_argmax.shape)
             q_values.append(q_value[:, -1, :])
             new_maxes = masked_argmax[:, -1]
-            # print(mask)
-            # print(new_maxes)
+            # print("mask",mask)
             # print("New maxes",new_maxes)
-            mask[0,new_maxes] = False
-            mask[:,0] = True # This is the choice that no RSU should be placed. 
+            mask[new_maxes] = False
             # mask = mask.unsqueeze(1).expand(-1, q_value.shape[1], -1)
             masked_argmaxs.append(new_maxes)
             # print("masked argmaxes array",masked_argmaxs)
             # print('\n')
-            if ~mask[1:].all():
+            if mask.all():
                 break
         
             next_indices = torch.stack(masked_argmaxs, dim=1).unsqueeze(-1).expand(intersections.shape[0], -1, self.c_embed)
@@ -185,8 +185,6 @@ class Actor(nn.Module):
 
         q_values = torch.stack(q_values, dim=1)
         masked_argmaxs = torch.stack(masked_argmaxs, dim=1)
-        # print(masked_argmax)
-        # quit()
         return q_values, masked_argmaxs
     
     def masked_max(
@@ -211,13 +209,14 @@ class Actor(nn.Module):
         Outputs:
             A ``torch.Tensor`` of including the maximum values.
         """
-        # print(x.shape)
-        # print(mask.shape)
-        x_replaced = x.masked_fill(~mask, -3e37)
-        # print(x_replaced.shape)
+        # print("x",x)
+        # print("mask",mask)
+        x_replaced = x*Tensor(mask)
+        x_replaced[x_replaced == 0] = -3e37
+        # print("x_replaced",x_replaced)
         max_value, max_index = x_replaced.max(dim=dim, keepdim=keepdim)
-        # print(max_value.shape)
-        # print(max_index.shape)
+        # print("max val",max_value)
+        # print("max index",max_index)
         return max_value, max_index
 
 class Critic(nn.Module):
@@ -258,15 +257,14 @@ class Actor_Critic(nn.Module):
         self.actor = Actor(num_features,nhead,W = W, n_layers = n_layers)
         self.critic = Critic(num_features)
     
-    def forward(self,intersections: torch.Tensor,
-                     mask: torch.Tensor):
-        log_pointer_scores, pointer_argmaxs = self.actor(intersections,mask)
+    def forward(self,intersections: torch.Tensor):
+        log_pointer_scores, pointer_argmaxs = self.actor(intersections)
         rsu_idx = pointer_argmaxs[pointer_argmaxs>0]
         rsu_network = intersections[:,rsu_idx,:]
         # critic_reward = self.critic(rsu_network)
-        critic_reward = 0
+        critic_reward = torch.tensor(0)
 
-        return log_pointer_scores, pointer_argmaxs, rsu_idx, critic_reward
+        return log_pointer_scores, pointer_argmaxs, pointer_argmaxs, critic_reward
 
     def reset(self) -> None:
         self.previous_action = None
