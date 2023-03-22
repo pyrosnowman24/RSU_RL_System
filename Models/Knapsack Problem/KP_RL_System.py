@@ -2,7 +2,7 @@ from json import encoder
 from tkinter import Variable
 from typing import List, Tuple, Callable, Iterator
 from collections import OrderedDict, deque
-from itertools import permutations
+from itertools import combinations
 import sys
 import os
 
@@ -19,16 +19,17 @@ from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
 from Actor_Critic import Actor_Critic
-from TS_Datamodule import TS_Datamodule
+from KP_Datamodule import KP_Datamodule
 
 import numpy as np
 import argparse
 
 np.set_printoptions(suppress=True)
 
-class TS_System(LightningModule):
+class KP_System(LightningModule):
     def __init__(self, 
                      num_features: int = 2,
+                     budget: int = 5,
                      nhead: int = 2,
                      num_layers: int = 8, 
                      lr: float = 1e-5,
@@ -38,7 +39,8 @@ class TS_System(LightningModule):
                      method: str = "sqrt"
                      ):
 
-        super(TS_System,self).__init__()
+        super(KP_System,self).__init__()
+        self.budget = budget
         self.nhead = nhead
         self.num_layers = num_layers
         self.lr = lr
@@ -48,7 +50,7 @@ class TS_System(LightningModule):
         
         pd.options.display.float_format = '{:.4f}'.format
         # self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
-        self.df_history = pd.DataFrame(columns=["ts_path","reward","loss"],dtype=object)
+        self.df_history = pd.DataFrame(columns=["kp_pack","reward","loss"],dtype=object)
         self.df_new_data = self.df_history.copy()
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
@@ -57,14 +59,14 @@ class TS_System(LightningModule):
         self.method = method
 
     def forward(self,intersections: Tensor) -> Tensor:
-        _, _, ts_path, critic_reward = self.actor_critic(intersections.type(torch.float))
-        return ts_path, critic_reward
+        _, _, kp_pack, critic_reward = self.actor_critic(intersections.type(torch.float))
+        return kp_pack, critic_reward
 
     def training_step(self,batch:Tuple[Tensor,Tensor]) -> OrderedDict:
-        cities = batch.type(torch.float)
-        self.best_reward, self.best_path = self.calculate_best_reward(cities)
-        log_pointer_scores, pointer_argmaxs, ts_path, critic_reward = self.actor_critic(cities)
-        ts_reward, loss = self.ts_loss(cities, ts_path[0,:])
+        items = batch.type(torch.float)
+        self.best_reward, self.best_pack = self.calculate_best_reward(items)
+        log_pointer_scores, pointer_argmaxs, kp_pack, critic_reward = self.actor_critic(items, self.budget)
+        ts_reward, loss = self.kp_loss(items, kp_pack[0,:])
         reward = torch.tensor(ts_reward, requires_grad=True,dtype=torch.float)
 
         padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
@@ -73,7 +75,7 @@ class TS_System(LightningModule):
 
         loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, reward, padded_rewards, critic_reward)
 
-        data = np.array((cities.detach().numpy(),
+        data = np.array((items.detach().numpy(),
                          np.around(padded_rewards.detach().numpy(),4),
                          loss.detach().numpy()),
                          dtype=object
@@ -85,10 +87,10 @@ class TS_System(LightningModule):
         return loss
 
     def test_step(self,batch,batch_idx):
-        cities = batch.type(torch.float)
-        self.best_reward, self.best_path = self.calculate_best_reward(cities)
-        log_pointer_scores, pointer_argmaxs, ts_path, critic_reward = self.actor_critic(cities)
-        ts_reward, _ = self.ts_loss(cities, ts_path[0,:])
+        items = batch.type(torch.float)
+        self.best_reward, self.best_pack = self.calculate_best_reward(items)
+        log_pointer_scores, pointer_argmaxs, kp_pack, critic_reward = self.actor_critic(items)
+        ts_reward, _ = self.kp_loss(items, kp_pack[0,:])
         reward = torch.tensor(ts_reward, requires_grad=True,dtype=torch.float)
         padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
         # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
@@ -96,33 +98,31 @@ class TS_System(LightningModule):
 
         loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, reward, padded_rewards, critic_reward)
         metrics = {"test_ts_reward": reward, "test_loss": loss}
-        print(ts_path)
+        print(kp_pack)
         print(metrics)
         return metrics
 
-    def calculate_best_reward(self,cities):
-        indices = np.arange(cities.shape[1])
-        path_permutations = list(permutations(indices))
-        best_reward = 100000
-        best_path = None
-        for path in path_permutations:
-            reward = self.path_reward(path, cities)
-            if reward < best_reward:
-                best_reward = reward
-                best_path = path
-        return best_reward, best_path
+    def calculate_best_reward(self,items):
+        indices = np.arange(items.shape[1])
+        path_combinations = list(combinations(indices, self.budget))
+        print(len(path_combinations))
+        best_reward = 0
+        best_pack = None
+        reward = np.empty(shape=(len(path_combinations)))
+        reward = items[0,path_combinations,0]
+        reward = reward.sum(axis=1)
+        best_reward = reward.max()
+        return best_reward, best_pack
 
-    def ts_loss(self, cities, ts_path):
-        ts_path_reward = self.path_reward(ts_path, cities)
+    def kp_loss(self, items, kp_pack):
+        kp_pack_reward = self.pack_reward(kp_pack, items)
 
-        loss = ts_path_reward - self.best_reward
-        return ts_path_reward, loss
+        loss = kp_pack_reward - self.best_reward
+        return kp_pack_reward, loss
 
-    def path_reward(self, path, cities):
+    def pack_reward(self, pack, items):
         reward = 0
-        for index in path[1:]:
-            distance = np.linalg.norm(cities[0,index]-cities[0,index-1])
-            reward += distance
+        reward = items[0,pack,0].sum()
         return reward
 
     def entropy(self,log_prob):
@@ -236,17 +236,17 @@ def save_model(model,model_directory,model_path):
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 5000
+    max_epochs = 2000
     save_model_bool = True
     display_figures = True
 
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-    model_name = "ts_new_reward_7_cities_256_hidden_5000_epochs_actor_loss"
+    model_name = "kp_5000_epochs_10_items_5_budget"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 
-    checkpoint_name = "ts_test"
+    checkpoint_name = "kp_test"
     checkpoint_directory = os.path.join(directory_path,checkpoint_name+'/')
     checkpoint_path = os.path.join(checkpoint_directory,checkpoint_name)
 
@@ -255,9 +255,9 @@ if __name__ == '__main__':
             f = open(os.path.join(model_directory,"output.txt"),'w')
             sys.stdout = f
 
-    model = TS_System(model_directory = model_directory, save_data_bool= save_model_bool)
+    model = KP_System(model_directory = model_directory, save_data_bool= save_model_bool, budget = 5)
     trainer = Trainer(max_epochs = max_epochs)
-    datamodule = TS_Datamodule(n_scenarios=100, n_cities=7)
+    datamodule = KP_Datamodule(n_scenarios=100, n_items=20)
     trainer.fit(model,datamodule=datamodule)
     if save_model_bool:
         save_model(model,model_directory,model_path)
