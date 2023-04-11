@@ -8,7 +8,7 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-model_name = "kp_5000_epochs_10_items_5_budget"
+model_name = "test2"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 
@@ -26,7 +26,7 @@ for kp_pack in ts_path_history:
 loss = history_df['loss'].to_numpy()
 
 def plot_single_loss():
-    x = np.arange(0,len(loss)+1,step = 5000)
+    x = np.arange(0,len(loss)+1,step = 1000)
     average_loss = []
     for i in range(len(x)-1):
         average_loss.append(np.nanmean(loss[x[i]:x[i+1]]))

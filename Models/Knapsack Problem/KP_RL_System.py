@@ -7,6 +7,7 @@ import sys
 import os
 
 import torch
+from torchviz import make_dot
 import pandas as pd
 from torch import Tensor, nn
 from torch.optim import Adam, Optimizer
@@ -58,9 +59,10 @@ class KP_System(LightningModule):
         self.lmbda = lmbda
         self.method = method
 
-    def forward(self,intersections: Tensor) -> Tensor:
-        _, _, kp_pack, critic_reward = self.actor_critic(intersections.type(torch.float))
-        return kp_pack, critic_reward
+    def forward(self,items, budget) -> Tensor:
+        items = torch.Tensor(items)[None,:]
+        log_pointer_scores, _, kp_pack, critic_reward = self.actor_critic(items, budget)
+        return log_pointer_scores, kp_pack
 
     def training_step(self,batch:Tuple[Tensor,Tensor]) -> OrderedDict:
         items = batch.type(torch.float)
@@ -105,7 +107,6 @@ class KP_System(LightningModule):
     def calculate_best_reward(self,items):
         indices = np.arange(items.shape[1])
         path_combinations = list(combinations(indices, self.budget))
-        print(len(path_combinations))
         best_reward = 0
         best_pack = None
         reward = np.empty(shape=(len(path_combinations)))
@@ -236,8 +237,8 @@ def save_model(model,model_directory,model_path):
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 2000
-    save_model_bool = True
+    max_epochs = 10
+    save_model_bool = False
     display_figures = True
 
     trainer = Trainer(max_epochs = max_epochs)
@@ -257,7 +258,11 @@ if __name__ == '__main__':
 
     model = KP_System(model_directory = model_directory, save_data_bool= save_model_bool, budget = 5)
     trainer = Trainer(max_epochs = max_epochs)
-    datamodule = KP_Datamodule(n_scenarios=100, n_items=20)
+    datamodule = KP_Datamodule(n_scenarios=100, n_items=10)
     trainer.fit(model,datamodule=datamodule)
     if save_model_bool:
         save_model(model,model_directory,model_path)
+
+    y1, y2 = model(next(iter(datamodule.database)), budget = 5)
+    make_dot(y1, params=dict(list(model.named_parameters()))).render("KP_RL_torchviz", format="png")
+
