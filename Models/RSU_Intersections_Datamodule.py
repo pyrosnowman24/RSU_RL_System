@@ -11,13 +11,10 @@ class RSU_Intersection_Dataset(Dataset):
                  n_scenarios: int = 100,
                  min_intersections: int = 10,
                  max_intersections: int = 15,
-                 min_pre_rsu_network: int = 0,
-                 max_pre_rsu_network: int = 5):
+                ):
         self.n_scenarios = n_scenarios
         self.min_intersections = min_intersections
         self.max_intersections = max_intersections
-        self.min_pre_rsu_network = min_pre_rsu_network
-        self.max_pre_rsu_network = max_pre_rsu_network
         self.agent = agent
 
         # self.sim_idx_array = []
@@ -43,13 +40,8 @@ class RSU_Intersection_Dataset(Dataset):
     def __getitem__(self,idx:int):
         # This version creates a new scenario each time its called
         intersection_idx = np.random.choice(self.agent.network_intersections.shape[0],size = np.random.randint(low=self.min_intersections, high=self.max_intersections + 1) , replace=False)
-        rsu_network_idx = np.random.choice(intersection_idx.shape[0],size = np.random.randint(low=self.min_pre_rsu_network, high=self.max_pre_rsu_network + 1),replace=False)
-
         intersections = self.agent.get_simulated_intersections(intersection_idx)
-        # scaled_intersections = self.scale_intersections(intersections)
-        intersections_padded,intersection_idx_padded,rsu_network_idx_padded,mask = self.pad_item(intersections, intersection_idx,rsu_network_idx)
-
-        return intersections_padded, intersection_idx_padded, rsu_network_idx_padded, mask
+        return intersections, intersection_idx
 
     def pad_item(self,
                  intersections: list,
@@ -122,8 +114,6 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
                  n_scenarios: int = 100,
                  min_intersections: int = 10,
                  max_intersections: int = 30,
-                 min_pre_rsu_network: int = 0,
-                 max_pre_rsu_network: int = 4,
                  stage = None):
         super().__init__()
         self.batch_size = batch_size
@@ -131,8 +121,6 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
         self.n_scenarios = n_scenarios
         self.min_intersections = min_intersections
         self.max_intersections = max_intersections
-        self.min_pre_rsu_network = min_pre_rsu_network
-        self.max_pre_rsu_network = max_pre_rsu_network
         self.agent = agent
         self.setup()
 
@@ -141,8 +129,7 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
                                                  self.n_scenarios,
                                                  self.min_intersections,
                                                  self.max_intersections,
-                                                 self.min_pre_rsu_network,
-                                                 self.max_pre_rsu_network)
+                                                )
         train_size = int(self.train_test_split*len(self.database))
         test_size = len(self.database) - train_size
         self.train_dataset,self.test_dataset = random_split(self.database,[train_size,test_size])

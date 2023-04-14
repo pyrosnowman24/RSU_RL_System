@@ -19,66 +19,72 @@ from scipy import stats,special
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+currentdir = os.path.dirname(os.path.realpath(__file__))
+parentdir = os.path.dirname(currentdir)
+parentdir2 = os.path.dirname(parentdir)
+sys.path.append(parentdir)
+sys.path.append(parentdir2)
+
+from Models.Agent import Agent
 from Actor_Critic_ptr import Actor_Critic
-from KPB_Datamodule import KPB_Datamodule
+from Models.RSU_Placement_Pointer.RSU_Intersection_Datamodule import RSU_Intersection_Datamodule
 
 import numpy as np
 import argparse
 
 np.set_printoptions(suppress=True)
 
-class KPB_System(LightningModule):
+class RSU_Placement_System(LightningModule):
     def __init__(self, 
                      num_features: int = 2,
-                     max_budget: int = 5,
                      hidden_size: int = 256,
-                     num_layers: int = 8, 
                      lr: float = 1e-5,
                      model_directory = "/home/demo/",
                      save_data_bool:bool = False,
-                     lmbda: float = 0.24098677879102673,
-                     method: str = "sqrt"
                      ):
 
-        super(KPB_System,self).__init__()
-        self.max_budget = max_budget
+        super(RSU_Placement_System,self).__init__()
         self.hidden_size = hidden_size
-        self.num_layers = num_layers
         self.lr = lr
         self.num_features = num_features
 
         self.actor_critic = Actor_Critic(num_features, hidden_size)
         
         pd.options.display.float_format = '{:.4f}'.format
-        # self.df_history = pd.DataFrame(columns=["intersection_idx","rsu_network","features","reward","critic_reward","entropy","actor_loss","critic_loss","loss"],dtype=object)
+        self.df_validation_history = pd.DataFrame(columns=["validation_loss"],dtype=object)
+        self.df_validation_history_new = self.df_validation_history.copy()
         self.df_history = pd.DataFrame(columns=["kp_pack","reward","weight","budget","loss"],dtype=object)
         self.df_new_data = self.df_history.copy()
         self.model_directory = model_directory
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
+        self.validation_history_file = os.path.join(self.model_directory,"validation_history.csv")
         self.save_data_bool = save_data_bool
-        self.lmbda = lmbda
-        self.method = method
 
-    def forward(self,items, budget) -> Tensor:
-        items = torch.Tensor(items)[None,:]
-        items = self.normalize_items(items, budget)
-        log_pointer_scores, pointer_argmaxs, kp_pack, critic_reward = self.actor_critic(items, budget)
+    def forward(self,intersections, budget) -> Tensor:
+        intersections = torch.Tensor(intersections)[None,:]
+        intersections = self.normalize_items(intersections, budget)
+        log_pointer_scores, pointer_argmaxs, kp_pack = self.actor_critic(intersections, budget)
         return log_pointer_scores, kp_pack
 
     def training_step(self,batch:Tuple[Tensor,Tensor]) -> OrderedDict:
-        items = batch.type(torch.float)
-        self.budget = np.random.randint(2,self.max_budget)
+        intersections = batch[0].type(torch.float)
+        intersection_idxs = batch[1]
+        self.budget = batch[2].numpy()[0]
 
-        items = self.normalize_items(items, self.budget)
-        self.best_reward, self.best_pack = self.calculate_best_reward(items)
-        log_pointer_scores, pointer_argmaxs, kp_pack, critic_reward = self.actor_critic(items, self.budget)
-        print("kp pack",kp_pack)
-        print("best pack",self.best_pack)
-        print("budget", self.budget)
+        inputs = torch.empty(size = (1,intersections.shape[1],2))
+        inputs = intersections[:,:,-2:]
+
+        inputs = self.normalize_items(inputs, self.budget)
+
+        self.best_reward, self.best_pack = self.calculate_best_reward(inputs)
+        log_pointer_scores, pointer_argmaxs, kp_pack = self.actor_critic(inputs, self.budget)
+        # print("kp pack",kp_pack)
+        # print("best pack",self.best_pack)
+        # print("budget", self.budget)
         # print(log_pointer_scores)
         loss = self.nll_loss(log_pointer_scores,kp_pack)
-        print("loss",loss)
-        reward, weight = self.pack_reward(kp_pack, items)
+        # print("loss",loss)
+        reward, weight = self.pack_reward(kp_pack, inputs)
 
         data = np.array((kp_pack.detach().numpy(),
                          reward.detach().numpy(),
@@ -91,33 +97,40 @@ class KPB_System(LightningModule):
         self.df_new_data.loc[0] = data
         if self.save_data_bool:
             self.save_data()
+        self.log("loss", loss)   
         return loss
+    
+    def validation_step(self, batch:Tuple[Tensor,Tensor], batch_idx):
+        intersections = batch[0].type(torch.float)
+        intersection_idxs = batch[1]
+        self.budget = batch[2].numpy()[0]
 
-    def test_step(self,batch,batch_idx):
-        items = batch.type(torch.float)
-        # self.best_reward, self.best_pack = self.calculate_best_reward(items)
-        log_pointer_scores, pointer_argmaxs, kp_pack, critic_reward = self.actor_critic(items)
-        ts_reward, _ = self.kp_loss(items, kp_pack[0,:])
-        reward = torch.tensor(ts_reward, requires_grad=True,dtype=torch.float)
-        padded_rewards = torch.zeros(pointer_argmaxs.shape[1],requires_grad=True)+.1
-        # padded_rewards[rsu_idx != 0] = torch.tensor(rewards)
-        padded_rewards[pointer_argmaxs[0,:] != 0] = reward.clone().detach().type(torch.float)
+        inputs = torch.empty(size = (1,intersections.shape[1],2))
+        inputs = intersections[:,:,-2:]
 
-        loss, entropy, actor_loss, critic_loss = self.loss(log_pointer_scores, pointer_argmaxs, reward, padded_rewards, critic_reward)
-        metrics = {"test_ts_reward": reward, "test_loss": loss}
-        print(kp_pack)
-        print(metrics)
-        return metrics
+        inputs = self.normalize_items(inputs, self.budget)
 
-    def calculate_best_reward(self,items):
-        indices = np.arange(items.shape[1])
+        self.best_reward, self.best_pack = self.calculate_best_reward(inputs)
+        log_pointer_scores, pointer_argmaxs, kp_pack = self.actor_critic(inputs, self.budget)
+        loss = self.nll_loss(log_pointer_scores,kp_pack)
+        self.log("val_loss", loss, on_epoch=True)
+
+        data = np.array(loss.detach().numpy())
+        self.df_validation_history.loc[self.df_validation_history.shape[0]] = data
+        self.df_validation_history_new.loc[0] = data
+
+        if self.save_data_bool:
+            self.save_validation()
+
+    def calculate_best_reward(self,intersections):
+        indices = np.arange(intersections.shape[1])
         best_reward = 0
         best_pack = None
         for i in range(1,self.budget+1):
             path_combinations = []
             path_combinations.extend(list(combinations(indices, i)))
             reward = np.empty(shape=(len(path_combinations)))
-            reward = items[0,path_combinations,0]
+            reward = intersections[0,path_combinations,0]
             reward = reward.sum(axis=1)
             best_reward_i = reward.max()
             best_reward_index = reward.argmax()
@@ -125,7 +138,7 @@ class KPB_System(LightningModule):
                 best_reward = best_reward_i.clone()
                 best_pack = path_combinations[best_reward_index]
         best_pack = np.asarray(best_pack)
-        best_items = items[0,best_pack,:]
+        # best_items = intersections[0,best_pack,:]
         # diffs = best_items[:,0] - best_items[:,1]
         # diffs, indexes = torch.sort(diffs, descending=True)
         # best_pack = best_pack[indexes]
@@ -142,17 +155,17 @@ class KPB_System(LightningModule):
         loss =  torch.nn.NLLLoss()(reshaped_log_pointer_score, padded_best_pack.type(torch.long)) # Maybe something weird with this, look into it more
         return loss
 
-    def pack_reward(self, pack, items):
+    def pack_reward(self, pack, intersections):
         reward = 0
-        reward = items[0,pack,0].sum()
+        reward = intersections[0,pack,0].sum()
         cost = 0
-        cost = items[0,pack,1].sum()
+        cost = intersections[0,pack,1].sum()
         return reward, cost
     
-    def normalize_items(self,items,budget):
-        items[0,:,0] = torch.divide(items[:,:,0],torch.max(items[:,:,0]))
-        items[0,:,1] = torch.divide(items[:,:,1],torch.tensor(budget))
-        return items
+    def normalize_items(self,intersections,budget):
+        intersections[0,:,0] = torch.divide(intersections[:,:,0],torch.max(intersections[:,:,0]))
+        intersections[0,:,1] = torch.divide(intersections[:,:,1],torch.tensor(budget))
+        return intersections
 
     def configure_optimizers(self) -> List[Optimizer]:
         """Initializes Adam optimizers for actor and critic.
@@ -169,6 +182,12 @@ class KPB_System(LightningModule):
         else: # else it exists so append without writing the header
             self.df_new_data.to_csv(self.model_history_file, index=False, mode='a', header=False)
 
+    def save_validation(self):
+        if not os.path.isfile(self.validation_history_file):
+            self.df_validation_history_new.to_csv(self.validation_history_file, index=False)
+        else: # else it exists so append without writing the header
+            self.df_validation_history_new.to_csv(self.validation_history_file, index=False, mode='a', header=False)
+
 def save_model(model,model_directory,model_path):
         model_history_file = os.path.join(model_directory,"model_history.csv")
         torch.save(model.state_dict(),model_path)
@@ -180,7 +199,7 @@ if __name__ == '__main__':
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
     # model_name = "kpb_2000_epochs_20_items_5_budget"
-    model_name = "test6"
+    model_name = "train_val_loss_1000_epochs"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 
@@ -192,16 +211,14 @@ if __name__ == '__main__':
             os.makedirs(model_directory)
             # f = open(os.path.join(model_directory,"output.txt"),'w')
             # sys.stdout = f
-
-    model = KPB_System(model_directory = model_directory, save_data_bool= save_model_bool, max_budget = 10)
+    simulation_agent = Agent()
+    model = RSU_Placement_System(model_directory = model_directory, save_data_bool= save_model_bool)
     trainer = Trainer(max_epochs = max_epochs)
-    datamodule = KPB_Datamodule(n_scenarios=1000, n_items=15)
-
-
-
+    datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, max_budget=5, min_intersections = 10, max_intersections = 15)
     trainer.fit(model,datamodule=datamodule)
-    if save_model_bool:
-        save_model(model,model_directory,model_path)
+    # trainer.validate(model,datamodule=datamodule)
+    # if save_model_bool:
+    #     save_model(model,model_directory,model_path)
 
     # y1, y2 = model(next(iter(datamodule.database)), budget = 5)
     # make_dot(y1, params=dict(list(model.named_parameters())), show_attrs=True, show_saved=True).render("KPB_RL_torchviz_show_attrs", format="png")

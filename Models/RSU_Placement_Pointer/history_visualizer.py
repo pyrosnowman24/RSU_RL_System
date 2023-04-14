@@ -8,11 +8,13 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-model_name = "test5"
+model_name = "test_rsu_data_validation"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
+validation_history_path = os.path.join(model_directory,"validation_history.csv")
 
 history_df = pd.read_csv(history_path, on_bad_lines='skip', engine = 'python')
+validation_history_df = pd.read_csv(validation_history_path, on_bad_lines='skip', engine = 'python')
 
 ts_path_history = history_df['kp_pack']
 reward_history = history_df['reward']
@@ -24,6 +26,7 @@ for kp_pack in ts_path_history:
     avg_rsu /= 2
 
 loss = history_df['loss'].to_numpy()
+validation_loss = validation_history_df['validation_loss'].to_numpy()
 
 def plot_single_loss():
     x = np.arange(0,len(loss)+1,step = 1000)
@@ -34,9 +37,30 @@ def plot_single_loss():
     fig,ax = plt.subplots(1)
     ax.plot(loss)
     ax.plot(x[1:],average_loss)
-    ax.set_xlabel("Sample")
-    ax.set_ylabel("Actor Loss")
+    ax.set_xlabel("Samples")
+    ax.set_ylabel("Training Loss")
+    ax.set_title("Training Loss over 1000 Epochs")
+    plt.show()
+
+def plot_train_val_loss():
+    x = np.arange(0,len(loss)+1,step = 1000)
+    average_loss = []
+    validation_average_loss = []
+    for i in range(len(x)-1):
+        average_loss.append(np.nanmean(loss[x[i]:x[i+1]]))
+        validation_average_loss.append(np.nanmean(validation_loss[x[i]:x[i+1]]))
+    print(average_loss)
+    fig,(ax,ax1) = plt.subplots(2)
+    ax.plot(loss)
+    ax.plot(x[1:],average_loss)
+    ax.set_xlabel("Samples")
+    ax.set_ylabel("Training Loss")
     ax.set_title("Actor Loss over 1000 Epochs")
+    ax1.plot(validation_loss)
+    ax1.plot(x[1:],validation_average_loss)
+    ax1.set_xlabel("Samples")
+    ax1.set_ylabel("Validation Loss")
+    ax1.set_title("Actor Loss over 1000 Epochs")
     plt.show()
 
 def plot_loss_history():
@@ -197,4 +221,4 @@ def sqrt_rewards():
     plt.show()
 
 
-plot_single_loss()
+plot_train_val_loss()
