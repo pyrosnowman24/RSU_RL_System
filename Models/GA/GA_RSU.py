@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import os, sys
 from itertools import combinations
 
@@ -13,34 +14,33 @@ from Models.RSU_Placement_Pointer.RSU_Intersection_Datamodule import RSU_Interse
 
 
 class GA_RSU():
-    def __init__(self,agent,population_size,mutation_prob):
-        self.agent = agent
+    def __init__(self,population_size,mutation_prob):
         self.population_size = population_size
         self.mutation_prob = mutation_prob
-        self.init_intersections()
 
-    def __call__(self,epochs, budget):
+    def __call__(self, intersections, budget, epochs=100):
         self.epochs = epochs
         self.budget = budget
-        population = self.init_population()
-        best_individual = None
+        normalized_intersections = self.normalize_items(intersections=intersections, budget=budget)
+        population = self.init_population(normalized_intersections)
+        best_individual = np.zeros(population[0].shape[0])
         best_score = 0
+        best_weight = 0
 
         for i in range(self.epochs):
-            print("Epoch ",i," Best Score: ",best_score)
-            scores = self.scoring(population)
-            best_individual_epoch, best_score_epoch = self.best_individual(population, scores)
+            # print("Epoch ",i," Best Score: ",best_score)
+            scores, weights = self.scoring(population, normalized_intersections)
+            best_individual_epoch, best_individual_weight, best_score_epoch = self.best_individual(population, scores, weights)
             if best_score_epoch > best_score:
                 best_individual = best_individual_epoch
                 best_score = best_score_epoch
+                best_weight = best_individual_weight
             parents = self.selection(population,scores)
             new_population = self.combination(parents)
             population = self.mutation(new_population)
-        print(best_individual)
-        print(self.individual_score(best_individual))     
-        optimal_score, optimal_individual = self.calculate_best_reward(self.intersections)
-        print(optimal_score)
-        print(self.individual_score(optimal_individual))
+        best_individual_index = np.arange(normalized_intersections.shape[0])[best_individual.astype(bool)]
+        best_score, best_weight = self.individual_score(best_individual, normalized_intersections)
+        return best_score, best_weight, best_individual_index  
 
     def init_intersections(self):
         n_scenarios = 1
@@ -54,21 +54,28 @@ class GA_RSU():
                                                  max_intersections=max_intersections)
         self.intersections = datamodule.database.scenarios[0,:,:]
 
-    def init_population(self):
-        population = np.random.randint(2, size = (self.population_size, self.intersections.shape[0]))
+    def init_population(self, intersections):
+        population = np.zeros(shape = (self.population_size, intersections.shape[0]))
+        pop_size = np.random.choice(np.arange(1,intersections.shape[0]-1,1), size = self.population_size)
+        for i in range(population.shape[0]):
+            pop_indices = np.random.choice(range(population.shape[1]),size = pop_size[i],replace=False)
+            population[i,pop_indices] = 1
         return population
 
-    def scoring(self,population):
+    def scoring(self,population, intersections):
         scores = np.zeros(shape = population.shape[0])
+        weights = np.zeros(shape = population.shape[0])
         for i in range(scores.shape[0]):
-            individual_intersections = self.intersections[population[i] == 1]
-            reward = np.sum(individual_intersections[:,-2])
-            weight = np.sum(individual_intersections[:,-1])
+            individual_intersections = intersections[population[i] == 1]
+            reward = torch.sum(individual_intersections[:,-2])
+            weight = torch.sum(individual_intersections[:,-1])
             if weight > self.budget:
                 scores[i] = self.budget- weight
+                weights[i] = weight
             else:
                 scores[i] = reward
-        return scores
+                weights[i] = weight
+        return scores, weights
 
     def selection(self, population, scores):
         scores_sorted_idx = np.argsort(scores)
@@ -96,17 +103,17 @@ class GA_RSU():
                 individual[idx] = 1 - individual[idx]
         return new_population
     
-    def best_individual(self,population, scores):
+    def best_individual(self,population, scores, weights):
         idx = np.argmax(scores)
-        return population[idx], scores[idx]
+        return population[idx], weights[idx], scores[idx]
     
-    def rsu_network_from_idnividual(self,individual):
-        return self.intersections[individual==1]
+    def rsu_network_from_individual(self,individual,intersections):
+        return intersections[individual==1]
     
-    def individual_score(self,individual):
-        individual_intersections = self.intersections[individual == 1]
-        reward = np.sum(individual_intersections[:,-2])
-        weight = np.sum(individual_intersections[:,-1])
+    def individual_score(self,individual, intersections):
+        individual_intersections = intersections[individual == 1]
+        reward = torch.sum(individual_intersections[:,-2])
+        weight = torch.sum(individual_intersections[:,-1])
         if weight > self.budget:
             score = reward + (self.budget- weight)
         else:
@@ -131,11 +138,14 @@ class GA_RSU():
         best_pack = np.asarray(best_pack)
         best_individual = np.zeros(intersections.shape[0])
         best_individual[best_pack] = 1
-        print(best_pack)
-        print(best_individual)
         return best_reward, best_individual
+    
+    def normalize_items(self,intersections,budget):
+        intersections[:,-2] = torch.divide(intersections[:,-2],torch.max(intersections[:,-2]))
+        intersections[:,-1] = torch.divide(intersections[:,-1],budget)
+        return intersections
                     
-if __name__ == '__main__':
-    simulation_agent = Agent()
-    test = GA_RSU(simulation_agent, 50, .1)
-    test(300, 10)
+# if __name__ == '__main__':
+#     simulation_agent = Agent()
+#     test = GA_RSU(simulation_agent, population_size = 50, mutation_prob = .1)
+#     test(epochs = 300, budget = 10)

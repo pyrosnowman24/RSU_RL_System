@@ -107,7 +107,7 @@ class RewardFunctions():
         rewards[0,:] = self.received_dcb_reward(self.features[0,:])
         rewards[1,:] = self.number_received_msg_reward(self.features[1,:])
         rewards[2,:] = self.degree_centrality_reward()
-        rewards[3,:] = self.rsu_network[:,-1]
+        rewards[3,:] = self.rsu_network[:,-1] # Closeness centrality
         
         rewards_sum = np.sum(rewards,axis=0)
         return rewards, rewards_sum, self.features

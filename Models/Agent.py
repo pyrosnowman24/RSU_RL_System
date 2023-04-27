@@ -330,6 +330,7 @@ class Agent:
                     coords[0,1:3] = self.traci2omnet(coords[0,1],coords[0,2])
                     intersections = np.append(intersections, coords, axis=0)
         intersections[:,-1] = self.closeness_centrality(intersections)
+        intersections[:,-2] = self.degree_centrality(intersections[:,-2])
         return intersections
 
     def create_projection(self,lines):
@@ -399,6 +400,17 @@ class Agent:
         incLanes = np.append(incLanes,unique)
         return incLanes, len(incLanes)
 
+    # def closeness_centrality(self, intersections):
+    #     closeness_degrees = np.zeros((intersections.shape[0]))
+    #     for i, rsu in enumerate(intersections):
+    #         distance_sum = 0
+    #         for intersection in intersections:
+    #             distance = np.linalg.norm(rsu - intersection)
+    #             distance_sum += distance
+    #         closeness_degree = intersections.shape[0] / distance_sum
+    #         closeness_degrees[i] = closeness_degree * 1000
+    #     return closeness_degrees
+    
     def closeness_centrality(self, intersections):
         closeness_degrees = np.zeros((intersections.shape[0]))
         for i, rsu in enumerate(intersections):
@@ -406,9 +418,12 @@ class Agent:
             for intersection in intersections:
                 distance = np.linalg.norm(rsu - intersection)
                 distance_sum += distance
-            closeness_degree = intersections.shape[0] / distance_sum
-            closeness_degrees[i] = closeness_degree * 1000
+            closeness_degrees[i] = intersections.shape[0] / distance_sum
+        closeness_degrees = np.divide(closeness_degrees, np.max(closeness_degrees))
         return closeness_degrees
+    
+    def degree_centrality(self,degree_centralities):
+        return np.divide(degree_centralities, np.max(degree_centralities))
 
 # sim_rsu_place = Agent()
 # 

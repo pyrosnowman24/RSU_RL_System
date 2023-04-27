@@ -8,7 +8,7 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-model_name = "knapsack_1000_epochs_400_scenarios_less_intersections"
+model_name = "dynamic_weights_1000_epochs"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 validation_history_path = os.path.join(model_directory,"validation_history.csv")
@@ -49,15 +49,14 @@ def plot_train_val_loss():
     for i in range(len(x)-1):
         average_loss.append(np.nanmean(loss[x[i]:x[i+1]]))
         validation_average_loss.append(np.nanmean(validation_loss[x[i]:x[i+1]]))
-    print(average_loss[-1])
-    print(validation_average_loss)
+    # print(average_loss)
     fig,(ax,ax1) = plt.subplots(2)
     ax.plot(loss)
     ax.plot(x[1:],average_loss)
     ax.set_xlabel("Samples")
     ax.set_ylabel("Training Loss")
     ax.set_title("Actor Loss over 1000 Epochs")
-    ax1.plot(validation_loss)
+    # ax1.plot(validation_loss)
     ax1.plot(x[1:],validation_average_loss)
     ax1.set_xlabel("Samples")
     ax1.set_ylabel("Validation Loss")

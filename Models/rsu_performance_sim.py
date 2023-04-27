@@ -39,7 +39,7 @@ directory_path = os.getcwd()
 model_name = "intersection_performance_dataset_new"
 model_directory = os.path.join(directory_path,model_name)
 reward_functions = RewardFunctions()
-# df = pd.read_csv(model_directory)
+df = pd.read_csv(model_directory)
 
 
 def create_new_performance_model():
@@ -87,26 +87,29 @@ def plot_performance_model():
     plt.show()
 
 def plot_rewards_xy():
-    rewards = df['reward'].to_numpy()
+    rewards = df['reward_sum'].to_numpy()
     x = df['x'].to_numpy()
     y = df['y'].to_numpy()
-    size = df['size'].to_numpy()
+    size = df['degree_centrality'].to_numpy()
 
     fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
+    # ax = fig.add_subplot(projection='3d')
+    ax = fig.add_subplot()
 
-    ax.scatter(x,y,rewards)
+    ax.scatter(x,y, c = plt.cm.plasma(rewards)) 
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    ax.set_zlabel("reward")
+    # ax.set_zlabel("reward")
+    ax.set_title("Rewards for intersections")
+    plt.set_cmap('plasma')
     plt.show()
 
-    fig,ax=plt.subplots(1)
-    ax.scatter(size,rewards)
-    ax.set_xlabel("# Roads Connected to Intersection")
-    ax.set_ylabel("Reward")
-    ax.set_title("# Roads Connected to Intersection vs. Reward")
-    plt.show()
+    # fig,ax=plt.subplots(1)
+    # ax.scatter(size,rewards)
+    # ax.set_xlabel("# Roads Connected to Intersection")
+    # ax.set_ylabel("Reward")
+    # ax.set_title("# Roads Connected to Intersection vs. Reward")
+    # plt.show()
 
 def plot_reward_skews():
     lmbda = 0.24098677879102673 # Variable determined by algorithm originally based on sampled rewards from entire data.
@@ -204,4 +207,4 @@ def reward_positive_ql(self,features):
 
     
 
-create_new_performance_model()
+plot_rewards_xy()

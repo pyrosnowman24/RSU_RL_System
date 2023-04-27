@@ -27,10 +27,8 @@ sys.path.append(parentdir2)
 
 from Models.Agent import Agent
 from Models.RSU_Placement_Pointer.Actor_Critic_ptr import Actor_Critic
-from Models.RSU_Placement_Pointer.RSU_Intersection_Datamodule_Fast import RSU_Intersection_Datamodule
-from Models.Knapsack_Algorithm.KA_RSU import KA_RSU
+from Models.RSU_Placement_Pointer.RSU_Intersection_Datamodule import RSU_Intersection_Datamodule
 from Models.GA.GA_RSU import GA_RSU
-
 
 import numpy as np
 import argparse
@@ -41,9 +39,10 @@ class RSU_Placement_System(LightningModule):
     def __init__(self, 
                      num_features: int = 2,
                      hidden_size: int = 256,
-                     lr: float = 1e-3,
+                     lr: float = 1e-5,
                      model_directory = "/home/demo/",
                      save_data_bool:bool = False,
+                     genetic_algorithm = None
                      ):
 
         super(RSU_Placement_System,self).__init__()
@@ -62,8 +61,7 @@ class RSU_Placement_System(LightningModule):
         self.model_history_file = os.path.join(self.model_directory,"model_history.csv")
         self.validation_history_file = os.path.join(self.model_directory,"validation_history.csv")
         self.save_data_bool = save_data_bool
-        self.knapsack_algorithm = KA_RSU()
-        self.genetic_algorithm = GA_RSU(population_size = 50, mutation_prob = .1)
+        self.genetic_algorithm = genetic_algorithm
 
     def forward(self,intersections, budget) -> Tensor:
         intersections = torch.Tensor(intersections)[None,:]
@@ -76,8 +74,6 @@ class RSU_Placement_System(LightningModule):
         intersections = batch[0].type(torch.float)
         intersection_idxs = batch[1]
         self.budget = batch[2].numpy()[0]
-        self.best_pack = batch[3].numpy()[0]
-        self.best_reward = batch[4][0]
         # print(self.best_reward, self.best_pack)
 
         inputs = torch.empty(size = (1,intersections.shape[1],2))
@@ -85,12 +81,8 @@ class RSU_Placement_System(LightningModule):
 
         inputs = self.normalize_items(inputs, self.budget)
 
-        # self.best_reward, self.best_pack = self.calculate_best_reward_brute_force(inputs)
-        # print(self.best_reward, self.best_pack)
-        # self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_knapsack(inputs)
-        # print(self.best_reward, self.best_weight, self.best_pack)
-        # self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_genetic(inputs)
-        # print(self.best_reward, self.best_weight, self.best_pack)
+        self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_genetic(inputs)
+        print(self.best_reward, self.best_pack)
 
         log_pointer_scores, pointer_argmaxs, kp_pack = self.actor_critic(inputs, self.budget)
         # print(kp_pack)
@@ -122,17 +114,13 @@ class RSU_Placement_System(LightningModule):
         intersections = batch[0].type(torch.float)
         intersection_idxs = batch[1]
         self.budget = batch[2].numpy()[0]
-        self.best_pack = batch[3].numpy()[0]
-        self.best_reward = batch[4][0]
 
         inputs = torch.empty(size = (1,intersections.shape[1],2))
         inputs = intersections[:,:,-2:]
 
         inputs = self.normalize_items(inputs, self.budget)
 
-        # self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_knapsack(inputs)
-        # self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_genetic(inputs)
-
+        self.best_reward, self.best_weight, self.best_pack = self.calculate_best_reward_genetic(inputs)
         log_pointer_scores, pointer_argmaxs, kp_pack = self.actor_critic(inputs, self.budget)
         loss = self.nll_loss(log_pointer_scores,kp_pack)
         self.log("val_loss", loss, on_epoch=True)
@@ -144,11 +132,11 @@ class RSU_Placement_System(LightningModule):
         if self.save_data_bool:
             self.save_validation()
 
-    def calculate_best_reward_brute_force(self,intersections, budget):
+    def calculate_best_reward_brute_force(self,intersections):
         indices = np.arange(intersections.shape[1])
         best_reward = 0
         best_pack = None
-        for i in range(1,budget+1):
+        for i in range(1,self.budget+1):
             path_combinations = []
             path_combinations.extend(list(combinations(indices, i)))
             reward = np.empty(shape=(len(path_combinations)))
@@ -166,11 +154,8 @@ class RSU_Placement_System(LightningModule):
         # best_pack = best_pack[indexes]
         return best_reward, best_pack
     
-    def calculate_best_reward_knapsack(self,intersections):
-        return self.knapsack_algorithm.ka_algorithm(intersections, self.budget)
-    
     def calculate_best_reward_genetic(self,intersections):
-        return self.genetic_algorithm(intersections=intersections[0,:,:], epochs=50, budget = self.budget)
+        return self.genetic_algorithm(intersections, self.budget)
 
     def nll_loss(self,log_pointer_scores, pack_idx):
         if self.best_pack.shape[0] > pack_idx.shape[0]:
@@ -180,7 +165,11 @@ class RSU_Placement_System(LightningModule):
             padded_best_pack = torch.zeros(pack_idx.shape[0])
             padded_best_pack[:self.best_pack.shape[0]] = torch.tensor(self.best_pack+1)
             reshaped_log_pointer_score = log_pointer_scores[:pack_idx.shape[0], :].clone()
-        loss =  torch.nn.NLLLoss()(reshaped_log_pointer_score, padded_best_pack.type(torch.long))
+        loss =  torch.nn.NLLLoss()(reshaped_log_pointer_score, padded_best_pack.type(torch.long)) # Maybe something weird with this, look into it more
+        return loss
+    
+    def mse_loss(self, pack_idx):
+        loss = torch.nn.MSELoss()()
         return loss
 
     def pack_reward(self, pack, intersections):
@@ -222,11 +211,11 @@ def save_model(model,model_directory,model_path):
         
 if __name__ == '__main__':
     max_epochs = 1000
-    save_model_bool = True
+    save_model_bool = False
     
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-    model_name = "knapsack_1000_epochs_400_scenarios_higher_lr"
+    model_name = "dynamic_weights_1000_epochs"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 
@@ -239,12 +228,10 @@ if __name__ == '__main__':
             # f = open(os.path.join(model_directory,"output.txt"),'w')
             # sys.stdout = f
     simulation_agent = Agent()
-    knapsack_algorithm = KA_RSU()
-    model = RSU_Placement_System(model_directory=model_directory, save_data_bool=save_model_bool, lr = 1e-2)
-    trainer = Trainer(max_epochs = max_epochs)
     genetic_algorithm = GA_RSU(population_size = 50, mutation_prob = .1)
-    knapsack_algorithm = KA_RSU()
-    datamodule = RSU_Intersection_Datamodule(simulation_agent, knapsack_algorithm, n_scenarios=100, min_budget=4, max_budget=6, min_intersections = 15, max_intersections = 30, min_weight=1, max_weight=3)
+    model = RSU_Placement_System(model_directory=model_directory, save_data_bool=save_model_bool, genetic_algorithm=genetic_algorithm)
+    trainer = Trainer(max_epochs = max_epochs)
+    datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 10, max_intersections = 20)
     # datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 10, max_intersections = 20)
     trainer.fit(model,datamodule=datamodule)
     trainer.validate(model,datamodule=datamodule)

@@ -14,9 +14,7 @@ class RSU_Intersection_Dataset(Dataset):
                  min_intersections: int = 10,
                  max_intersections: int = 15,
                  min_budget: int = 2,
-                 max_budget: int = 10,
-                 min_weight: int = 0,
-                 max_weight: int = 1,
+                 max_budget: int = 10
                  ):
         self.agent = agent
         self.n_scenarios = n_scenarios
@@ -24,8 +22,6 @@ class RSU_Intersection_Dataset(Dataset):
         self.max_intersections = max_intersections
         self.min_budget = min_budget
         self.max_budget = max_budget
-        self.min_weight = min_weight
-        self.max_weight = max_weight
 
         self.sim_idx_array = []
         self.n_intersections = np.random.randint(low=min_intersections, high=max_intersections + 1, size=n_scenarios)
@@ -53,7 +49,7 @@ class RSU_Intersection_Dataset(Dataset):
             self.scenario_idx[i,:self.n_intersections[i]] = np.random.choice(self.agent.network_intersections.shape[0],size = (self.n_intersections[i],1) , replace=False)
             for j in range(self.n_intersections[i]):
                 self.scenarios[i,j,:-1] = self.agent.get_simulated_intersections(self.scenario_idx[i,j])
-                self.scenarios[i,j,-1] = np.random.uniform(self.min_weight,self.max_weight)
+                self.scenarios[i,j,-1] = np.random.uniform(0,1)
 
     def calculate_best_reward_knapsack(self,intersections):
         return self.knapsack_algorithm(intersections, self.budget)
@@ -67,9 +63,7 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
                  min_intersections: int = 10,
                  max_intersections: int = 15,
                  min_budget: int = 2,
-                 max_budget: int = 10,
-                 min_weight: int = 0,
-                 max_weight: int = 1,
+                 max_budget: int = 10
                  ):
         super().__init__()
         self.agent = agent
@@ -80,8 +74,6 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
         self.max_intersections = max_intersections
         self.min_budget = min_budget
         self.max_budget = max_budget
-        self.min_weight = min_weight
-        self.max_weight = max_weight
         self.setup()
 
     def setup(self, stage: str = None):
@@ -91,9 +83,7 @@ class RSU_Intersection_Datamodule(pl.LightningDataModule):
                                     self.min_intersections,
                                     self.max_intersections,
                                     self.min_budget,
-                                    self.max_budget,
-                                    self.min_weight,
-                                    self.max_weight,
+                                    self.max_budget
                                 )
         train_size = int(self.train_test_split*len(self.database))
         test_size = len(self.database) - train_size

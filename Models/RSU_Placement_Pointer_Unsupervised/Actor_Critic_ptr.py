@@ -11,10 +11,9 @@ class Embedding(nn.Module):
     def __init__(self,c_inputs,c_embed):
         super(Embedding,self).__init__()
         self.embedding_layer = nn.Linear(c_inputs, c_embed, bias=False)
-        self.dropout_position = nn.Dropout(0.5)
 
     def forward(self,data):
-        return self.dropout_position(self.embedding_layer(data))
+        return self.embedding_layer(data)
     
 class Encoder(nn.Module):
     def __init__(self, num_features, hidden_size: int):
@@ -125,7 +124,7 @@ class Actor(nn.Module):
     def __init__(self, 
                  num_features = 4,
                  hidden_size = 128,
-                 embedding_size = 32,
+                 embedding_size = 16,
                  attention_units = 128
                  ):
         super(Actor,self).__init__()
@@ -154,8 +153,7 @@ class Actor(nn.Module):
         # for p in self.decoder.parameters():
         #     if p.requires_grad:
         #         print(p)
-
-        embedded_state = self.embedding(items) # Embeds items to higher dimension
+        embedded_state = self.embedding(items)
 
         out, hs = self.encoder(embedded_state)
         
@@ -243,6 +241,35 @@ class Actor(nn.Module):
         x_replaced[x_replaced == 0] = -3e-37
         predictions = F.log_softmax(x_replaced, dim=-1)
         return predictions
+
+class Critic(nn.Module):
+    def __init__(self,num_features = 3,
+                      c_embed = 16 ):
+        super(Critic,self).__init__()
+        self.embedding = Embedding(num_features,c_embed)
+        self.network = nn.Sequential(nn.Linear(c_embed,16),
+                                     nn.ReLU(),
+                                     nn.Linear(16,32),
+                                     nn.ReLU(),
+                                     nn.Linear(32,64),
+                                     nn.ReLU(),
+                                     nn.Linear(64,32),
+                                     nn.ReLU(),
+                                     nn.Linear(32,16),
+                                     nn.ReLU(),
+                                     nn.Linear(16,1))
+        
+
+    def forward(self,intersections):
+        embedded_state = self.embedding(intersections)
+
+        rewards = []
+        for sample in embedded_state:
+            reward = self.network(sample)
+            rewards.append(reward)
+        rewards = torch.stack(rewards,dim=0)
+
+        return rewards[:,:,0]
 
 class Actor_Critic(nn.Module):
     def __init__(self, num_features: int,
