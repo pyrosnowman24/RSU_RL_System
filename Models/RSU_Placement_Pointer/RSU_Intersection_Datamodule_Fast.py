@@ -66,7 +66,7 @@ class RSU_Intersection_Dataset(Dataset):
                 self.scenario_idx[index,:self.n_intersections[i]] = np.random.choice(self.agent.network_intersections.shape[0],size = (self.n_intersections[i],1) , replace=False)
                 for k in range(self.n_intersections[i]):
                     self.scenarios[index,k,:-1] = self.agent.get_simulated_intersections(self.scenario_idx[index,k])
-                self.scenarios[i,j,-1] = np.random.uniform(self.min_weight,self.max_weight)
+                    self.scenarios[index,k,-1] = np.random.uniform(self.min_weight,self.max_weight)
                 best_reward, best_weight, best_pack = self.calculate_best_reward(self.scenarios[index, :len(self.scenario_idx[index,self.scenario_idx[index]>-1])], self.budgets[j])
                 self.scenarios_best_packs[index,:best_pack.shape[0]] = best_pack
                 self.scenarios_best_rewards[index] = best_reward

@@ -221,12 +221,12 @@ def save_model(model,model_directory,model_path):
         torch.save(model.state_dict(),model_path)
         
 if __name__ == '__main__':
-    max_epochs = 1000
+    max_epochs = 500
     save_model_bool = True
     
     trainer = Trainer(max_epochs = max_epochs)
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-    model_name = "knapsack_1000_epochs_400_scenarios_higher_lr"
+    model_name = "knapsack_300_epochs_100_scenarios_final5"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 
@@ -240,11 +240,11 @@ if __name__ == '__main__':
             # sys.stdout = f
     simulation_agent = Agent()
     knapsack_algorithm = KA_RSU()
-    model = RSU_Placement_System(model_directory=model_directory, save_data_bool=save_model_bool, lr = 1e-2)
+    model = RSU_Placement_System(model_directory=model_directory, save_data_bool=save_model_bool, lr = 1e-4)
     trainer = Trainer(max_epochs = max_epochs)
     genetic_algorithm = GA_RSU(population_size = 50, mutation_prob = .1)
     knapsack_algorithm = KA_RSU()
-    datamodule = RSU_Intersection_Datamodule(simulation_agent, knapsack_algorithm, n_scenarios=100, min_budget=4, max_budget=6, min_intersections = 15, max_intersections = 30, min_weight=1, max_weight=3)
+    datamodule = RSU_Intersection_Datamodule(simulation_agent, knapsack_algorithm, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 10, max_intersections = 25, min_weight=1, max_weight=3)
     # datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 10, max_intersections = 20)
     trainer.fit(model,datamodule=datamodule)
     trainer.validate(model,datamodule=datamodule)

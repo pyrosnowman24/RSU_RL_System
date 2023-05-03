@@ -3,6 +3,7 @@ import torch
 import os,sys
 from itertools import combinations
 import time
+import matplotlib.pyplot as plt
 
 currentdir = os.path.dirname(os.path.realpath(__file__))
 parentdir = os.path.dirname(currentdir)
@@ -41,7 +42,8 @@ def calculate_best_reward_brute_force(intersections, budget):
 
 if __name__ == '__main__':
     simulation_agent = Agent()
-    datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 40, max_intersections = 50, min_weight=0, max_weight=5)
+    # datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=100, min_budget=5, max_budget=6, min_intersections = 40, max_intersections = 50, min_weight=0, max_weight=5)
+    datamodule = RSU_Intersection_Datamodule(simulation_agent, n_scenarios=1000, min_budget=9, max_budget=10, min_intersections = 10, max_intersections = 25, min_weight=1, max_weight=3)
 
     knapsack_algorithm = KA_RSU()
 
@@ -50,7 +52,7 @@ if __name__ == '__main__':
     greedy_algorithm = Greedy_RSU(simulation_agent)
 
     directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-    model_name = "dynamic_weights_3000_epochs_reduced_size_dropout"
+    model_name = "knapsack_300_epochs_100_scenarios_final3"
     model_directory = os.path.join(directory_path,model_name+'/')
     model_path = os.path.join(model_directory,model_name)
 
@@ -59,36 +61,81 @@ if __name__ == '__main__':
 
     model = RSU_Placement_System(model_directory=model_directory)
     model.load_state_dict(torch.load(checkpoint_path))
+    GA_avg_reward = []
+    GA_avg_weight = []
+    GA_avg_runtime = []
 
-    intersection, intersection_ids, budget = next(iter(datamodule.database))
+    KA_avg_reward = []
+    KA_avg_weight = []
+    KA_avg_runtime = []
+
+    pointer_avg_reward = []
+    pointer_avg_weight = []
+    pointer_avg_runtime = []
+
+    greedy_avg_reward = []
+    greedy_avg_weight = []
+    greedy_avg_runtime = []
 
     start = time.time()
 
-    # BF_reward, BF_weight, BF_pack = calculate_best_reward_brute_force(intersections=intersection, budget=budget)
-    # print("Genetic Algorithm:\n",BF_reward, BF_weight, BF_pack)
+    for i in range(500):
 
-    GA_reward, GA_weight, GA_pack = genetic_algorithm(intersections=torch.tensor(intersection), epochs=100, budget=budget)
-    print("Genetic Algorithm:\n",GA_reward, GA_weight, GA_pack)
-    print(f"Runtime: {time.time()-start}")
-    print('\n')
-    start = time.time()
+        intersection, intersection_ids, budget = datamodule.database.__getitem__(i)
+        # print(intersection[:,-1])
 
-    KA_reward, KA_weight, KA_pack = knapsack_algorithm(intersections=torch.tensor(intersection[None,:,:]), budget=budget)
-    print("Knapsack Algorithm:\n",KA_reward, KA_weight, KA_pack)
-    print(f"Runtime: {time.time()-start}")
-    print('\n')
-    start = time.time()
+        # GA_reward, GA_weight, GA_pack = genetic_algorithm(intersections=torch.tensor(intersection), epochs=100, budget=budget)
+        # # print("Genetic Algorithm:\n",GA_reward, GA_weight, GA_pack)
+        # # print(f"Runtime: {time.time()-start}")
+        # # print('\n')
+        # GA_avg_reward.append(GA_reward)
+        # GA_avg_weight.append(budget - GA_weight)
+        # GA_avg_runtime.append(time.time()-start)
+        # start = time.time()
 
-    # log_pointer_scores, kp_pack, reward, weight = model(intersection[:,-2:], budget)
-    # print("Pointer Network:\n",reward, weight, kp_pack)
-    # print(f"Runtime: {time.time()-start}")
-    # print('\n')
-    # start = time.time()
+        # KA_reward, KA_weight, KA_pack = knapsack_algorithm(intersections=torch.tensor(intersection), budget=budget)
+        # # print("Knapsack Algorithm:\n",KA_reward, KA_weight, KA_pack)
+        # # print(f"Runtime: {time.time()-start}")
+        # # print('\n')
+        # KA_avg_reward.append(KA_reward)
+        # KA_avg_weight.append(budget - KA_weight)
+        # KA_avg_runtime.append(time.time()-start)
+        # start = time.time()
 
-    # greedy_reward, greedy_weight, greedy_pack = greedy_algorithm(intersections=intersection, budget=budget)
-    # print("Greedy Algorithm:\n",greedy_reward, greedy_weight, greedy_pack)
-    # print(f"Runtime: {time.time()-start}")
-    # print('\n')
-    # start = time.time()
+        log_pointer_scores, kp_pack, reward, weight = model(intersection[:,-2:], budget)
+        # print("Pointer Network:\n",reward, weight, kp_pack)
+        # print(f"Runtime: {time.time()-start}")
+        # print('\n')
+        pointer_avg_reward.append(reward)
+        pointer_avg_weight.append(weight-budget)
+        pointer_avg_runtime.append(time.time()-start)
+        start = time.time()
 
-    print(budget)
+        # greedy_reward, greedy_weight, greedy_pack = greedy_algorithm(intersections=intersection, budget=budget)
+        # # print("Greedy Algorithm:\n",greedy_reward, greedy_weight, greedy_pack)
+        # # print(f"Runtime: {time.time()-start}")
+        # # print('\n')
+        # greedy_avg_reward.append(greedy_reward)
+        # greedy_avg_weight.append(budget - greedy_weight)
+        # greedy_avg_runtime.append(time.time()-start)
+        # start = time.time()
+
+    # print(np.mean(GA_avg_reward), np.mean(GA_avg_weight), np.mean(GA_avg_runtime))
+    # print(np.mean(KA_avg_reward), np.mean(KA_avg_weight), np.mean(KA_avg_runtime))
+    # print(np.mean(pointer_avg_reward), np.mean(pointer_avg_weight), np.mean(pointer_avg_runtime))
+    # print(np.mean(greedy_avg_reward), np.mean(greedy_avg_weight), np.mean(greedy_avg_runtime))
+    # print(budget)
+
+    fig, (ax1,ax2,ax3) = plt.subplots(3)
+    ax1.plot(pointer_avg_reward)
+    ax2.plot(pointer_avg_weight)
+    ax3.plot(pointer_avg_runtime)
+    ax1.set_title("Reward, weight, and runtime of pointer network over 500 scenarios")
+    ax1.set_xlabel("Scenario")
+    ax1.set_ylabel("Reward")
+    ax2.set_xlabel("Scenario")
+    ax2.set_ylabel("Estimated Budget - Budget")
+    ax3.set_xlabel("Scenario")
+    ax3.set_ylabel("Runtime")
+    plt.show()
+

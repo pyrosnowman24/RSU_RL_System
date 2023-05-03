@@ -8,7 +8,10 @@ import os, re
 from scipy import stats, special
 
 directory_path = "/home/demo/RSU_RL_Placement/trained_models/"
-model_name = "knapsack_1000_epochs_400_scenarios_less_intersections"
+# train_val_loss_3000_epochs_1000 samples
+# train_val_loss_fast_datamodule_1000_epochs
+
+model_name = "knapsack_300_epochs_100_scenarios_final3"
 model_directory = os.path.join(directory_path,model_name+'/')
 history_path = os.path.join(model_directory,"model_history.csv")
 validation_history_path = os.path.join(model_directory,"validation_history.csv")
@@ -43,7 +46,7 @@ def plot_single_loss():
     plt.show()
 
 def plot_train_val_loss():
-    x = np.arange(0,len(loss)+1,step = 1000)
+    x = np.arange(0,len(loss)+1,step = 100)
     average_loss = []
     validation_average_loss = []
     for i in range(len(x)-1):
@@ -56,12 +59,12 @@ def plot_train_val_loss():
     ax.plot(x[1:],average_loss)
     ax.set_xlabel("Samples")
     ax.set_ylabel("Training Loss")
-    ax.set_title("Actor Loss over 1000 Epochs")
+    ax.set_title("Pointer Network Training Loss over 150 Epoch")
     ax1.plot(validation_loss)
     ax1.plot(x[1:],validation_average_loss)
     ax1.set_xlabel("Samples")
     ax1.set_ylabel("Validation Loss")
-    ax1.set_title("Actor Loss over 1000 Epochs")
+    ax1.set_title("Pointer Network Validation Loss over 150 Epochs")
     plt.show()
 
 def plot_loss_history():
